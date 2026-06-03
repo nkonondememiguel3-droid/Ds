@@ -2,11 +2,20 @@
 #define ds_dynamic_array_h
 
 #include <stdio.h>
+#include <assert.h>
+#include "ds_arena.h"
 
 typedef struct {
   size_t size_used;
   size_t size;
 } _ds_dyn_array_t_;
+
+extern void *ds_da_grow(
+    _ds_arena_t_ *a,
+    void *arr,
+    size_t element_size,
+    size_t new_cap
+);
 
 // retrieve the header of the dynamic array given the user pointer.
 #define ds_da_hdr(arr) ((_ds_dyn_array_t_ *)(arr) - 1)

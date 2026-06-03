@@ -1,17 +1,22 @@
 cmake_minimum_required(VERSION 3.20)
-project(ds)
+project(ds LANGUAGES C)
 
-set(C_STANDARD 11)
-set(C_STANDARD_REQUIRED ON)
-set(C_EXTENSIONS OFF)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+add_subdirectory(memory)
+
 set(source
-  ds.c ds.h
-  memory/ds_arena.c memory/ds_arena.h
-  dynamic_array/ds_dyn_array.c dynamic_array/ds_dyn_array.h
-  main.c
+  ds_dyn_array.c 
+  ds_dyn_array.h
 )
 
-add_executable(${PROJECT_NAME} ${source})
+add_library(${PROJECT_NAME} STATIC ${source})
 
+target_include_directories(${PROJECT_NAME} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)
+
+target_link_libraries(${PROJECT_NAME} PUBLIC ds_arena)

@@ -1,6 +1,6 @@
 #include "ds_dyn_array.h"
 
-#include "../memory/ds_arena.h"
+#include "ds_arena.h"
 #include <stdio.h>
 #include <string.h>
 
