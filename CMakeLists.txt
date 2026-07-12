@@ -9,7 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_subdirectory(memory)
 
 set(source
-  ds_dyn_array.c 
+  ds_dyn_array.c
   ds_dyn_array.h
 )
 
@@ -20,3 +20,8 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 
 target_link_libraries(${PROJECT_NAME} PUBLIC ds_arena)
+
+# debuging purposes
+find_package(MKL REQUIRED CONFIG)
+add_executable(main main.c)
+target_link_libraries(main PRIVATE ${PROJECT_NAME} MKL::MKL)
