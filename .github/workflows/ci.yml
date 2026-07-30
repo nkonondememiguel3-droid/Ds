@@ -1,0 +1,57 @@
+name: Framework DS CI/CD
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build-multi_os:
+    name: Build sur ${{ matrix.os }} (Clang/MSVC)
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      # 1. Récupération du code source
+      - name: Checkout du dépôt
+        uses: actions/checkout@v4
+
+      # 2. Installation de CMake et Ninja (Accélérateur de build multiplateforme)
+      - name: Configuration de CMake
+        uses: lukka/get-cmake@latest
+
+      # 3. Installation des dépendances spécifiques à Linux (Intel MKL & Valgrind)
+      - name: Installe MKL et Valgrind (Ubuntu uniquement)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y intel-mkl valgrind
+
+      # 4. Désactivation temporaire de MKL sur macOS/Windows pour la compilation générique
+      - name: Supprime la dépendance MKL de test (macOS/Windows)
+        if: matrix.os != 'ubuntu-latest'
+        shell: bash
+        run: |
+          # Supprime la recherche de MKL dans le CMakeLists.txt pour que macOS et Windows compilent sans erreur
+          sed -i.bak '/find_package(MKL/d' CMakeLists.txt || true
+          sed -i.bak 's/MKL::MKL//g' CMakeLists.txt || true
+
+      # 5. Étape de génération des fichiers de build CMake
+      - name: Configuration du Build avec CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      # 6. Compilation globale de ds_arena, libds et main
+      - name: Compilation du Framework (-O3 Release)
+        run: cmake --build build --config Release
+
+      # 7. Exécution des tests de stress mémoire avec Valgrind (Uniquement sur Linux)
+      - name: Exécution des tests de fuite mémoire (Valgrind sur Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cd build
+          valgrind --leak-check=full --error-exitcode=1 ./main
