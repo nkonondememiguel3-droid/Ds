@@ -35,3 +35,4 @@ target_link_libraries(${PROJECT_NAME} PUBLIC ds_arena)
 
 # debuging purposes
 add_executable(main main.c)
+target_link_libraries(main PRIVATE ${PROJECT_NAME})
