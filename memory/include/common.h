@@ -55,11 +55,17 @@ typedef struct __ds_arena_chunk__ {
   size_t chunk_size_used;
 } _ds_arena_chunk_t_;
 
+typedef struct _ds_free_block_ {
+  void *address;
+  struct _ds_free_block_ *next;
+} _ds_free_block_t_;
+
 typedef struct {
   _ds_arena_chunk_t_ *head;
   _adjust_memory_interface_t_ imemory;
   size_t chunk_size;
-  _ds_free_cell_t_ *free_list_head;
+
+  _ds_free_block_t_ *free_list_head;
 
   size_t allocs_from_bump;
   size_t allocs_from_free_list;

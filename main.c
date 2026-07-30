@@ -1,37 +1,41 @@
 #include <stdio.h>
 
 #include "ds_arena.h"
-#include "ds_stack_queue.h"
+#include "ds_graph.h"
 #include "gc.h"
 
+// Déclaration du callback implémenté dans ds_graph.c
+extern void ds_graph_gc_mark_extension(ds_node_t node);
+
 int main() {
+  // ÉTAPE INDISPENSABLE : Branchement de l'extension de marquage du graphe sur le GC
+  ds_gc_set_mark_extension(ds_graph_gc_mark_extension);
+
   _ds_arena_t_ arena = ds_arena_new(0);
-  ds_stack_t *pile = ds_stack_new(&arena);
+  ds_graph_t *mon_graphe = ds_graph_new(&arena);
 
-  printf("Lancement d'un scénario de stress mémoire (Push/Pop intensif)...\n");
+  ds_node_t graph_root = ds_tag_ptr(mon_graphe, TYPE_NODE);
+  ds_gc_register_root(&arena, &graph_root);
 
-  // Phase 1 : 10 allocations initiales (vont toutes consommer sur le Bump pointer)
-  for (int i = 0; i < 10; i++) {
-    ds_stack_push(&arena, pile, ds_make_int(i));
-  }
+  ds_vertex_t *vA = ds_graph_add_vertex(&arena, mon_graphe, "A", ds_make_int(100));
+  ds_vertex_t *vB = ds_graph_add_vertex(&arena, mon_graphe, "B", ds_make_int(200));
+  ds_vertex_t *vC = ds_graph_add_vertex(&arena, mon_graphe, "C", ds_make_int(300));
 
-  // Phase 2 : On vide entièrement la pile pour remplir la Free-List de blocs morts
-  while (ds_stack_size(pile) > 0) {
-    ds_stack_pop(&arena, pile);
-  }
+  ds_graph_add_edge(&arena, vA, vB);
+  ds_graph_add_edge(&arena, vB, vA);
+  ds_graph_add_edge(&arena, vB, vC);
 
-  // Phase 3 : On réinsère 10 nouveaux éléments.
-  // L'arène doit intercepter la Free-List et afficher 100% de recyclage sur cette phase.
-  for (int i = 0; i < 10; i++) {
-    ds_stack_push(&arena, pile, ds_make_int(i * 10));
-  }
+  printf("Graphe orienté circulaire initialisé. Nombre de sommets : %zu\n", mon_graphe->vertices->length);
 
-  // 5. Affichage du rapport avant fermeture
+  printf("Suppression du point d'entrée 'A' du graphe...\n");
+  ds_graph_remove_vertex(&arena, mon_graphe, "A");
+
+  ds_arena_run_gc(&arena);
   ds_arena_print_stats(&arena);
 
-  // Nettoyage final
-  ds_arena_run_gc(&arena);
   ds_arena_destroy(&arena);
   ds_gc_destroy();
+
+  printf("Test des Graphes Orientés Circulaires achevé avec succès !\n");
   return 0;
 }

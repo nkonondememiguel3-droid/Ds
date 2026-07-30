@@ -53,30 +53,27 @@ static inline _ds_arena_chunk_t_ *ds_arena_grow(_ds_arena_t_ *a, size_t needed) 
 }
 
 inline void *ds_arena_alloc(_ds_arena_t_ *a, size_t size) {
-  if (size < sizeof(_ds_free_cell_t_)) {
-    size = sizeof(_ds_free_cell_t_);
-  }
   size = ds_arena_align_up(size);
   void *ptr = NULL;
 
-  // 1. TENTATIVE DE RÉUTILISATION DE LA FREE-LIST (DÉMASQUAGE REQUIS)
+  // 1. TENTATIVE DE RÉUTILISATION VIA LA FREE-LIST EXTERNE INDÉSTRUCTIBLE
   if (a->free_list_head != NULL) {
-    // ÉTAPE A : On extrait l'adresse brute du nœud disponible en enlevant les tags
-    _ds_free_cell_t_ *available_node = (_ds_free_cell_t_ *)ds_get_ptr((ds_node_t)a->free_list_head);
+    _ds_free_block_t_ *node = a->free_list_head;
 
-    // ÉTAPE B : On sauvegarde impérativement le pointeur suivant AVANT le memset
-    void *next_in_list = ds_get_ptr(available_node->next_free);
+    // On récupère l'adresse physique préservée
+    ptr = node->address;
 
-    // ÉTAPE C : On met à jour la tête de la Free-List de l'arène avec l'élément sauvegardé
-    a->free_list_head = (_ds_free_cell_t_ *)next_in_list;
+    // On avance la tête vers le bloc libre suivant
+    a->free_list_head = node->next;
 
-    // ÉTAPE D : On peut maintenant vider la mémoire du bloc en toute sécurité sans briser la chaîne
-    ptr = (void *)available_node;
+    // On libère le petit maillon de contrôle externe
+    free(node);
+
+    // Nettoyage complet sécurisé du bloc réutilisé
     memset(ptr, 0, size);
-
-    a->allocs_from_free_list++;  // Compteur : Bloc recyclé !
+    a->allocs_from_free_list++;
   }
-  // 2. ALLOCATION SÉQUENTIELLE SUR LE BUMP POINTER
+  // 2. FALLBACK SUR LE BUMP POINTER
   else {
     _ds_arena_chunk_t_ *c = a->head;
     if (!c || c->chunk_size_used + size > c->chunk_size) c = ds_arena_grow(a, size);
@@ -84,7 +81,7 @@ inline void *ds_arena_alloc(_ds_arena_t_ *a, size_t size) {
     c->chunk_size_used += size;
     memset(ptr, 0, size);
 
-    a->allocs_from_bump++;  // Compteur : Bloc neuf créé !
+    a->allocs_from_bump++;
   }
 
   ds_gc_register_allocation(ptr);
@@ -96,9 +93,11 @@ void ds_arena_recycle(_ds_arena_t_ *a, void *dead_ptr) {
 
   ds_gc_unregister_allocation(dead_ptr);
 
-  _ds_free_cell_t_ *cell = (_ds_free_cell_t_ *)dead_ptr;
-  cell->next_free = ds_tag_ptr(a->free_list_head, TYPE_NODE);
-  a->free_list_head = cell;
+  _ds_free_block_t_ *node = (_ds_free_block_t_ *)malloc(sizeof(_ds_free_block_t_));
+  node->address = dead_ptr;
+
+  node->next = a->free_list_head;
+  a->free_list_head = node;
 }
 
 inline void ds_arena_destroy(_ds_arena_t_ *a) {
@@ -108,6 +107,14 @@ inline void ds_arena_destroy(_ds_arena_t_ *a) {
     a->imemory.free(c, NULL);
     c = next;
   }
+
+  _ds_free_block_t_ *free_node = a->free_list_head;
+  while (free_node) {
+    _ds_free_block_t_ *tmp = free_node->next;
+    free(free_node);
+    free_node = tmp;
+  }
+
   a->head = NULL;
   a->free_list_head = NULL;
 }

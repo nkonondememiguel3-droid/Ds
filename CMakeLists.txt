@@ -13,12 +13,16 @@ set(source
   ds_dyn_array.h
   ds_string.h
   ds_string.c
+  ds_graph.h
+  ds_graph.c
   ds_hash_map.c
   ds_hash_map.h
   ds_linked_list.h
   ds_linked_list.c
   ds_stack_queue.h
   ds_stack_queue.c
+  ds_priority_queue.h
+  ds_priority_queue.c
 )
 
 add_library(${PROJECT_NAME} STATIC ${source})
