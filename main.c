@@ -1,41 +1,38 @@
 #include <stdio.h>
 
 #include "ds_arena.h"
-#include "ds_graph.h"
+#include "ds_string.h"
 #include "gc.h"
 
-// Déclaration du callback implémenté dans ds_graph.c
-extern void ds_graph_gc_mark_extension(ds_node_t node);
-
 int main() {
-  // ÉTAPE INDISPENSABLE : Branchement de l'extension de marquage du graphe sur le GC
-  ds_gc_set_mark_extension(ds_graph_gc_mark_extension);
-
   _ds_arena_t_ arena = ds_arena_new(0);
-  ds_graph_t *mon_graphe = ds_graph_new(&arena);
 
-  ds_node_t graph_root = ds_tag_ptr(mon_graphe, TYPE_NODE);
-  ds_gc_register_root(&arena, &graph_root);
+  // 1. Test de ds_str_format
+  ds_string_t *lang = ds_str_new(&arena, "Lisp");
+  int score = 99;
+  ds_string_t *formatted = ds_str_format(&arena, "Le score de %s est de %d/100.", lang->data, score);
+  printf("Format : %s\n", formatted->data);
 
-  ds_vertex_t *vA = ds_graph_add_vertex(&arena, mon_graphe, "A", ds_make_int(100));
-  ds_vertex_t *vB = ds_graph_add_vertex(&arena, mon_graphe, "B", ds_make_int(200));
-  ds_vertex_t *vC = ds_graph_add_vertex(&arena, mon_graphe, "C", ds_make_int(300));
+  // 2. Test de ds_str_trim
+  ds_string_t *dirty_str = ds_str_new(&arena, "   \t  Texte Nettoye    \n ");
+  ds_string_t *clean_str = ds_str_trim(&arena, dirty_str);
+  printf("Trim   : [%s]\n", clean_str->data);
 
-  ds_graph_add_edge(&arena, vA, vB);
-  ds_graph_add_edge(&arena, vB, vA);
-  ds_graph_add_edge(&arena, vB, vC);
+  // 3. Test de ds_str_replace
+  ds_string_t *phrase = ds_str_new(&arena, "Le C est rapide, le C est bas niveau.");
+  ds_string_t *old_word = ds_str_new(&arena, "C");
+  ds_string_t *new_word = ds_str_new(&arena, "Rust");
 
-  printf("Graphe orienté circulaire initialisé. Nombre de sommets : %zu\n", mon_graphe->vertices->length);
+  ds_string_t *updated_phrase = ds_str_replace(&arena, phrase, old_word, new_word);
+  printf("Replace: %s\n", updated_phrase->data);
 
-  printf("Suppression du point d'entrée 'A' du graphe...\n");
-  ds_graph_remove_vertex(&arena, mon_graphe, "A");
-
-  ds_arena_run_gc(&arena);
   ds_arena_print_stats(&arena);
 
+  // 4. Nettoyage et vérification de la non-fuite par le GC
+  ds_arena_run_gc(&arena);
   ds_arena_destroy(&arena);
   ds_gc_destroy();
 
-  printf("Test des Graphes Orientés Circulaires achevé avec succès !\n");
+  printf("\nTest des extensions utilitaires acheve avec succes !\n");
   return 0;
 }

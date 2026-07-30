@@ -1,6 +1,7 @@
 #ifndef ds_string_h
 #define ds_string_h
 
+#include <stdarg.h>
 #include <stdbool.h>
 
 #include "common.h"
@@ -21,5 +22,9 @@ extern ds_string_t *ds_str_substr(_ds_arena_t_ *a, const ds_string_t *src, size_
 extern int ds_str_find(const ds_string_t *src, const ds_string_t *sub);
 extern ds_string_t **ds_str_split(_ds_arena_t_ *a, const ds_string_t *s1, const ds_string_t *delim);
 extern ds_string_t *ds_str_join(_ds_arena_t_ *a, ds_string_t **arr, const ds_string_t *sep);
+extern ds_string_t *ds_str_format(_ds_arena_t_ *a, const char *format, ...);
+extern ds_string_t *ds_str_trim(_ds_arena_t_ *a, const ds_string_t *src);
+extern ds_string_t *ds_str_replace(_ds_arena_t_ *a, const ds_string_t *src, const ds_string_t *old_sub,
+                                   const ds_string_t *new_sub);
 
 #endif  // ds_string_h
