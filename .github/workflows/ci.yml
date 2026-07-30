@@ -25,22 +25,6 @@ jobs:
       - name: Configuration de CMake
         uses: lukka/get-cmake@latest
 
-      # 3. Installation des dépendances spécifiques à Linux (Intel MKL & Valgrind)
-      - name: Installe MKL et Valgrind (Ubuntu uniquement)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y intel-mkl valgrind
-
-      # 4. Désactivation temporaire de MKL sur macOS/Windows pour la compilation générique
-      - name: Supprime la dépendance MKL de test (macOS/Windows)
-        if: matrix.os != 'ubuntu-latest'
-        shell: bash
-        run: |
-          # Supprime la recherche de MKL dans le CMakeLists.txt pour que macOS et Windows compilent sans erreur
-          sed -i.bak '/find_package(MKL/d' CMakeLists.txt || true
-          sed -i.bak 's/MKL::MKL//g' CMakeLists.txt || true
-
       # 5. Étape de génération des fichiers de build CMake
       - name: Configuration du Build avec CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
