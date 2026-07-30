@@ -1,10 +1,10 @@
 #include "ds_arena.h"
 
-#include <mkl.h>
-#include <mkl_service.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "gc.h"
 
 inline size_t ds_arena_align_up(size_t n) { return (n + (ARENA_ALIGN - 1)) & ~(size_t)(ARENA_ALIGN - 1); }
 
@@ -26,69 +26,76 @@ static inline void _a_default_free(void *ptr, void *context) {
 inline _ds_arena_t_ ds_arena_new(size_t chunk_size) {
   _ds_arena_t_ arena = (_ds_arena_t_){
       .head = NULL,
+      .free_list_head = NULL,
       .chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE,
   };
-
   arena.imemory.alloc = _a_default_alloc;
   arena.imemory.realloc = _a_default_realloc;
   arena.imemory.free = _a_default_free;
-
   return arena;
 }
 
 static inline _ds_arena_chunk_t_ *ds_arena_grow(_ds_arena_t_ *a, size_t needed) {
   size_t sz = (a->chunk_size > needed) ? a->chunk_size : needed;
   sz = ds_arena_align_up(sz);
-
   _ds_arena_chunk_t_ *c = (_ds_arena_chunk_t_ *)a->imemory.alloc(sizeof(_ds_arena_chunk_t_) + sz, NULL);
   if (!c) {
     fputs("ds: out of memory in arena_grow\n", stderr);
     abort();
   }
-
   c->chunk_size = sz;
   c->chunk_size_used = 0;
-
-  // Insert into the linked list of the memory arena. (at the head).
   c->next_arena_chunk = a->head;
   a->head = c;
-
   return c;
 }
 
 inline void *ds_arena_alloc(_ds_arena_t_ *a, size_t size) {
+  if (size < sizeof(_ds_free_cell_t_)) {
+    size = sizeof(_ds_free_cell_t_);
+  }
   size = ds_arena_align_up(size);
+  void *ptr = NULL;
 
-  _ds_arena_chunk_t_ *c = a->head;
-  // if it's the first allocation or the memory used in this chunk plus the
-  // size we want is greater than the size of the chunk, we allocate a new
-  // bigger bloc of memory.
-  if (!c || c->chunk_size_used + size > c->chunk_size) c = ds_arena_grow(a, size);
+  if (a->free_list_head != NULL) {
+    _ds_free_cell_t_ *available_node = a->free_list_head;
+    a->free_list_head = (_ds_free_cell_t_ *)ds_get_ptr(available_node->next_free);
+    ptr = (void *)available_node;
+    memset(ptr, 0, size);
+  } else {
+    _ds_arena_chunk_t_ *c = a->head;
+    if (!c || c->chunk_size_used + size > c->chunk_size) c = ds_arena_grow(a, size);
+    ptr = (void *)((char *)(c + 1) + c->chunk_size_used);
+    c->chunk_size_used += size;
+    memset(ptr, 0, size);
+  }
 
-  void *ptr = (char *)(c + 1) + c->chunk_size_used;
-  c->chunk_size_used += size;
-
-  memset(ptr, 0, size);
+  // ENREGISTREMENT AUTOMATIQUE DU POINTEUR DANS LE GC EXTERNE
+  ds_gc_register_allocation(ptr);
   return ptr;
+}
+
+void ds_arena_recycle(_ds_arena_t_ *a, void *dead_ptr) {
+  if (!dead_ptr) return;
+  _ds_free_cell_t_ *cell = (_ds_free_cell_t_ *)dead_ptr;
+  cell->next_free = ds_tag_ptr(a->free_list_head, TYPE_NODE);
+  a->free_list_head = cell;
 }
 
 inline void ds_arena_destroy(_ds_arena_t_ *a) {
   _ds_arena_chunk_t_ *c = a->head;
-
   while (c) {
     _ds_arena_chunk_t_ *next = c->next_arena_chunk;
     a->imemory.free(c, NULL);
     c = next;
   }
   a->head = NULL;
+  a->free_list_head = NULL;
 }
 
-// Checkpoint / restore.
 inline _ds_arena_checkpoint_t_ ds_arena_checkpoint(_ds_arena_t_ *a) {
-  return (_ds_arena_checkpoint_t_){
-      .checkpoint_head = a->head,
-      .checkpoint_size_used = a->head ? a->head->chunk_size_used : 0,
-  };
+  return (_ds_arena_checkpoint_t_){.checkpoint_head = a->head,
+                                   .checkpoint_size_used = a->head ? a->head->chunk_size_used : 0};
 }
 
 inline void ds_arena_reset_to(_ds_arena_t_ *a, _ds_arena_checkpoint_t_ cp) {
@@ -97,21 +104,16 @@ inline void ds_arena_reset_to(_ds_arena_t_ *a, _ds_arena_checkpoint_t_ cp) {
     a->head = dead->next_arena_chunk;
     a->imemory.free(dead, NULL);
   }
-
   if (a->head) a->head->chunk_size_used = cp.checkpoint_size_used;
+  a->free_list_head = NULL;
 }
 
-_ds_arena_t_ ds_arena_new_with_allocator(size_t chunk_size, ds_mem_alloc_func m_alloc,
-                                        ds_mem_realloc_func m_realloc, ds_mem_free_func m_free,
-                                        void *context) {
+_ds_arena_t_ ds_arena_new_with_allocator(size_t chunk_size, ds_mem_alloc_func m_alloc, ds_mem_realloc_func m_realloc,
+                                         ds_mem_free_func m_free, void *context) {
   _ds_arena_t_ arena = (_ds_arena_t_){
-      .head = NULL,
-      .chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE,
-  };
-
+      .head = NULL, .free_list_head = NULL, .chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE};
   arena.imemory.alloc = m_alloc;
   arena.imemory.realloc = m_realloc;
   arena.imemory.free = m_free;
-
   return arena;
 }

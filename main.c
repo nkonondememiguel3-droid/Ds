@@ -1,43 +1,40 @@
-#include <mkl_service.h>
 #include <stdio.h>
-#include <stdlib.h>
 
 #include "ds_arena.h"
-#include "ds_dyn_array.h"
+#include "gc.h"
 
-void *alloc_mkl(size_t bytes, void *user_data) {
-  (void)user_data;
-  return mkl_malloc(bytes, 64);
-}
+typedef struct {
+  ds_node_t value;
+  ds_node_t next;
+} MyListNode;
 
-void *realloc_mkl(void *ptr, size_t new_size, void *user_data) {
-  (void)user_data;
-  return mkl_realloc(ptr, new_size);
-}
+int main() {
+  _ds_arena_t_ arena = ds_arena_new(0);
 
-void free_mkl(void *ptr, void *user_data) {
-  (void)user_data;
-  MKL_free(ptr);
-}
+  ds_node_t ma_liste = ds_tag_ptr(NULL, TYPE_NIL);
 
-int main(void) {
-  /* _ds_arena_t_ arena = ds_arena_new(0); */
-  _ds_arena_t_ arena = ds_arena_new_with_allocator(0, alloc_mkl, realloc_mkl, free_mkl, NULL);
+  ds_gc_register_root(&arena, &ma_liste);
 
-  /* int *numbers = ARENA_NEW(&arena, int); */
+  MyListNode *n1 = ARENA_NEW(&arena, MyListNode);
+  n1->value = ds_tag_ptr((void *)42, TYPE_INT);
+  n1->next = ds_tag_ptr(NULL, TYPE_NIL);
+  ma_liste = ds_tag_ptr(n1, TYPE_NODE);
 
-  int *numbers = NULL;
+  MyListNode *n2 = ARENA_NEW(&arena, MyListNode);
+  n2->value = ds_tag_ptr((void *)100, TYPE_INT);
+  n2->next = ma_liste;
+  ma_liste = ds_tag_ptr(n2, TYPE_NODE);
 
-  ds_da_push(&arena, numbers, 10);
-  ds_da_push(&arena, numbers, 20);
-  ds_da_push(&arena, numbers, 30);
+  printf("Liste initiale créée dans l'arène.\n");
 
-  ds_da_reserve(&arena, numbers, 10);
+  ma_liste = n2->next;
 
-  printf("len = %zu\n", ds_da_len(numbers));
-  printf("cap = %zu\n", ds_da_cap(numbers));
+  ds_arena_run_gc(&arena);
 
-  for (size_t i = 0; i < ds_da_len(numbers); ++i) printf("%d\n", numbers[i]);
+  MyListNode *n3 = ARENA_NEW(&arena, MyListNode);
+  printf("Nouveau nœud alloué à l'adresse recyclée : %p\n", (void *)n3);
 
   ds_arena_destroy(&arena);
+  ds_gc_destroy();
+  return 0;
 }
