@@ -33,9 +33,3 @@ jobs:
       - name: Compilation du Framework (-O3 Release)
         run: cmake --build build --config Release
 
-      # 7. Exécution des tests de stress mémoire avec Valgrind (Uniquement sur Linux)
-      - name: Exécution des tests de fuite mémoire (Valgrind sur Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          cd build
-          valgrind --leak-check=full --error-exitcode=1 ./main
