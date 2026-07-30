@@ -11,6 +11,14 @@ add_subdirectory(memory)
 set(source
   ds_dyn_array.c
   ds_dyn_array.h
+  ds_string.h
+  ds_string.c
+  ds_hash_map.c
+  ds_hash_map.h
+  ds_linked_list.h
+  ds_linked_list.c
+  ds_stack_queue.h
+  ds_stack_queue.c
 )
 
 add_library(${PROJECT_NAME} STATIC ${source})

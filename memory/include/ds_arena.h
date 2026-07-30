@@ -25,4 +25,6 @@ extern void ds_arena_reset_to(_ds_arena_t_ *a, _ds_arena_checkpoint_t_ cp);
 _ds_arena_t_ ds_arena_new_with_allocator(size_t chunk_size, ds_mem_alloc_func m_alloc, ds_mem_realloc_func m_realloc,
                                          ds_mem_free_func m_free, void *context);
 
+extern void ds_arena_print_stats(const _ds_arena_t_ *a);
+
 #endif  // ds_arena_h

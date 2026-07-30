@@ -1,19 +1,26 @@
 #include "ds_dyn_array.h"
 
-#include "ds_arena.h"
 #include <stdio.h>
 #include <string.h>
 
+#include "ds_arena.h"
+
 inline void *ds_da_grow(_ds_arena_t_ *a, void *arr, size_t element_size, size_t new_cap) {
-  size_t old_lenght = ds_da_len(arr);
-  size_t alloc_size = sizeof(_ds_dyn_array_t_) + new_cap * element_size;
+  size_t old_length = ds_da_len(arr);
+
+  size_t alloc_size = sizeof(_ds_dyn_array_t_) + (new_cap * element_size);
   alloc_size = ds_arena_align_up(alloc_size);
 
-  _ds_dyn_array_t_ *hdr = (_ds_dyn_array_t_ *) ds_arena_alloc(a, alloc_size);
-  hdr->size_used = old_lenght;
-  hdr->size = new_cap;
+  _ds_dyn_array_t_ *new_hdr = (_ds_dyn_array_t_ *)ds_arena_alloc(a, alloc_size);
+  new_hdr->size_used = old_length;
+  new_hdr->size = new_cap;
 
-  if (arr && old_lenght > 0) memcpy(hdr + 1, arr, old_lenght * element_size);
+  if (arr && old_length > 0) {
+    memcpy(new_hdr + 1, arr, old_length * element_size);
 
-  return (void *)(hdr + 1);
+    _ds_dyn_array_t_ *old_hdr = ds_da_hdr(arr);
+    ds_arena_recycle(a, old_hdr);
+  }
+
+  return (void *)(new_hdr + 1);
 }

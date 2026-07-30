@@ -24,14 +24,16 @@ static inline void _a_default_free(void *ptr, void *context) {
 }
 
 inline _ds_arena_t_ ds_arena_new(size_t chunk_size) {
-  _ds_arena_t_ arena = (_ds_arena_t_){
-      .head = NULL,
-      .free_list_head = NULL,
-      .chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE,
-  };
+  _ds_arena_t_ arena = (_ds_arena_t_){.head = NULL,
+                                      .free_list_head = NULL,
+                                      .chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE,
+                                      .allocs_from_bump = 0,
+                                      .allocs_from_free_list = 0};
+
   arena.imemory.alloc = _a_default_alloc;
   arena.imemory.realloc = _a_default_realloc;
   arena.imemory.free = _a_default_free;
+
   return arena;
 }
 
@@ -57,26 +59,43 @@ inline void *ds_arena_alloc(_ds_arena_t_ *a, size_t size) {
   size = ds_arena_align_up(size);
   void *ptr = NULL;
 
+  // 1. TENTATIVE DE RÉUTILISATION DE LA FREE-LIST (DÉMASQUAGE REQUIS)
   if (a->free_list_head != NULL) {
-    _ds_free_cell_t_ *available_node = a->free_list_head;
-    a->free_list_head = (_ds_free_cell_t_ *)ds_get_ptr(available_node->next_free);
+    // ÉTAPE A : On extrait l'adresse brute du nœud disponible en enlevant les tags
+    _ds_free_cell_t_ *available_node = (_ds_free_cell_t_ *)ds_get_ptr((ds_node_t)a->free_list_head);
+
+    // ÉTAPE B : On sauvegarde impérativement le pointeur suivant AVANT le memset
+    void *next_in_list = ds_get_ptr(available_node->next_free);
+
+    // ÉTAPE C : On met à jour la tête de la Free-List de l'arène avec l'élément sauvegardé
+    a->free_list_head = (_ds_free_cell_t_ *)next_in_list;
+
+    // ÉTAPE D : On peut maintenant vider la mémoire du bloc en toute sécurité sans briser la chaîne
     ptr = (void *)available_node;
     memset(ptr, 0, size);
-  } else {
+
+    a->allocs_from_free_list++;  // Compteur : Bloc recyclé !
+  }
+  // 2. ALLOCATION SÉQUENTIELLE SUR LE BUMP POINTER
+  else {
     _ds_arena_chunk_t_ *c = a->head;
     if (!c || c->chunk_size_used + size > c->chunk_size) c = ds_arena_grow(a, size);
     ptr = (void *)((char *)(c + 1) + c->chunk_size_used);
     c->chunk_size_used += size;
     memset(ptr, 0, size);
+
+    a->allocs_from_bump++;  // Compteur : Bloc neuf créé !
   }
 
-  // ENREGISTREMENT AUTOMATIQUE DU POINTEUR DANS LE GC EXTERNE
   ds_gc_register_allocation(ptr);
   return ptr;
 }
 
 void ds_arena_recycle(_ds_arena_t_ *a, void *dead_ptr) {
   if (!dead_ptr) return;
+
+  ds_gc_unregister_allocation(dead_ptr);
+
   _ds_free_cell_t_ *cell = (_ds_free_cell_t_ *)dead_ptr;
   cell->next_free = ds_tag_ptr(a->free_list_head, TYPE_NODE);
   a->free_list_head = cell;
@@ -116,4 +135,19 @@ _ds_arena_t_ ds_arena_new_with_allocator(size_t chunk_size, ds_mem_alloc_func m_
   arena.imemory.realloc = m_realloc;
   arena.imemory.free = m_free;
   return arena;
+}
+
+void ds_arena_print_stats(const _ds_arena_t_ *a) {
+  if (!a) return;
+  size_t total = a->allocs_from_bump + a->allocs_from_free_list;
+  float ratio = total ? ((float)a->allocs_from_free_list / (float)total) * 100.0f : 0.0f;
+
+  printf("\n==================================================\n");
+  printf("         RAPPORT DE TÉLÉMÉTRIE DE L'ARÈNE         \n");
+  printf("==================================================\n");
+  printf("Allocations neuves (Bump Pointer)   : %zu\n", a->allocs_from_bump);
+  printf("Allocations recyclées (Free-List)   : %zu\n", a->allocs_from_free_list);
+  printf("Total des demandes de mémoire       : %zu\n", total);
+  printf("Taux d'efficacité du recyclage GC   : %.2f%%\n", ratio);
+  printf("==================================================\n\n");
 }
