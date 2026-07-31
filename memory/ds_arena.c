@@ -1,5 +1,6 @@
 #include "ds_arena.h"
 
+#include <immintrin.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,34 +53,41 @@ static inline _ds_arena_chunk_t_ *ds_arena_grow(_ds_arena_t_ *a, size_t needed) 
   return c;
 }
 
+static inline void ds_simd_memset_zero(void *ptr, size_t size) {
+  char *dst = (char *)ptr;
+
+  __m256i zero_vector = _mm256_setzero_si256();
+
+  size_t i = 0;
+  for (; i + 32 <= 32; i += 32) _mm256_storeu_si256((__m256i *)(dst + i), zero_vector);
+
+  /* clean up residual if there is some left over */
+  for (; i < size; i++) dst[i] = 0;
+}
+
 inline void *ds_arena_alloc(_ds_arena_t_ *a, size_t size) {
   size = ds_arena_align_up(size);
   void *ptr = NULL;
 
-  // 1. TENTATIVE DE RÉUTILISATION VIA LA FREE-LIST EXTERNE INDÉSTRUCTIBLE
   if (a->free_list_head != NULL) {
     _ds_free_block_t_ *node = a->free_list_head;
 
-    // On récupère l'adresse physique préservée
     ptr = node->address;
 
-    // On avance la tête vers le bloc libre suivant
     a->free_list_head = node->next;
 
-    // On libère le petit maillon de contrôle externe
     free(node);
 
-    // Nettoyage complet sécurisé du bloc réutilisé
-    memset(ptr, 0, size);
+    /* (void )memset(ptr, 0, size); */
+    ds_simd_memset_zero(ptr, size);
     a->allocs_from_free_list++;
-  }
-  // 2. FALLBACK SUR LE BUMP POINTER
-  else {
+  } else {
     _ds_arena_chunk_t_ *c = a->head;
     if (!c || c->chunk_size_used + size > c->chunk_size) c = ds_arena_grow(a, size);
     ptr = (void *)((char *)(c + 1) + c->chunk_size_used);
     c->chunk_size_used += size;
-    memset(ptr, 0, size);
+    /* memset(ptr, 0, size); */
+    ds_simd_memset_zero(ptr, size);
 
     a->allocs_from_bump++;
   }

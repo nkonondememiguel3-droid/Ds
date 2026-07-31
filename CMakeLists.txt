@@ -27,6 +27,8 @@ set(source
 
 add_library(${PROJECT_NAME} STATIC ${source})
 
+target_compile_options(${PROJECT_NAME} PRIVATE -march=native)
+
 target_include_directories(${PROJECT_NAME} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
 )

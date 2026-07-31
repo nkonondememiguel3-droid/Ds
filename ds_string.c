@@ -1,6 +1,7 @@
 #include "ds_string.h"
 
 #include <ctype.h>
+#include <immintrin.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -74,16 +75,59 @@ ds_string_t *ds_str_substr(_ds_arena_t_ *a, const ds_string_t *src, size_t start
   return ds_str_new_len(a, src->data + start, len);
 }
 
+/* int ds_str_find(const ds_string_t *src, const ds_string_t *sub) { */
+/*   if (!src || !sub || sub->length > src->length) return -1; */
+/*   if (sub->length == 0) return 0; */
+
+/*   size_t limit = src->length - sub->length; */
+/*   for (size_t i = 0; i <= limit; i++) { */
+/*     if (memcmp(src->data + i, sub->data, sub->length) == 0) { */
+/*       return (int)i; */
+/*     } */
+/*   } */
+/*   return -1; */
+/* } */
 int ds_str_find(const ds_string_t *src, const ds_string_t *sub) {
   if (!src || !sub || sub->length > src->length) return -1;
   if (sub->length == 0) return 0;
 
-  size_t limit = src->length - sub->length;
-  for (size_t i = 0; i <= limit; i++) {
-    if (memcmp(src->data + i, sub->data, sub->length) == 0) {
-      return (int)i;
+  const char *h_data = src->data;
+  size_t h_len = src->length;
+  const char *n_data = sub->data;
+  size_t n_len = sub->length;
+
+  /* first character of the sub string to find */
+  char first_char = n_data[0];
+  /* we duplicate this character 32 time of a 256-bit register */
+  __m256i first_vec = _mm256_set1_epi8(first_char);
+
+  size_t i = 0;
+  size_t limit = h_len - n_len;
+
+  for (; i + 32 < limit; i += 32) {
+    __m256i chunk = _mm256_loadu_si256((const __m256i *)(h_data + i));
+
+    /* binary comparison: return 0xFF if there are equal otherwise it returns 0x00 */
+    __m256i cmp_res = _mm256_cmpeq_epi8(chunk, first_vec);
+    /* convert to a mask of 32-bit ones(1) */
+    int mask = _mm256_movemask_epi8(cmp_res);
+
+    while (mask != 0) {
+      int bit_idx = __builtin_ctz(mask);
+      size_t match_position = i + bit_idx;
+
+      if (match_position <= limit && memcmp(h_data + match_position, n_data, n_len) == 0)
+        return (int)match_position; /* find */
+
+      /* clear the bit to search the correspondance in the same package */
+      mask &= (mask - 1);
     }
   }
+
+  for (; i <= 32; i++)
+    if (h_data[i] == first_char && memcmp(h_data + i, n_data + i, n_len) == 0) return (int)i;
+
+  /* not found */
   return -1;
 }
 
