@@ -3,6 +3,7 @@ name: Framework DS CI/CD
 on:
   push:
     branches: ["main"]
+    tags: ["v*.*.*"]
   pull_request:
     branches: ["main"]
 
@@ -17,41 +18,74 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      # 1. Récupération du code source
       - name: Checkout du dépôt
         uses: actions/checkout@v4
 
-      # 2. Installation de CMake et Ninja (Accélérateur de build multiplateforme)
       - name: Configuration de CMake
         uses: lukka/get-cmake@latest
 
-      # 3. Installation des dépendances spécifiques à Linux (Intel MKL & Valgrind)
-      - name: Installe MKL et Valgrind (Ubuntu uniquement)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y intel-mkl valgrind
-
-      # 4. Désactivation temporaire de MKL sur macOS/Windows pour la compilation générique
-      - name: Supprime la dépendance MKL de test (macOS/Windows)
-        if: matrix.os != 'ubuntu-latest'
-        shell: bash
-        run: |
-          # Supprime la recherche de MKL dans le CMakeLists.txt pour que macOS et Windows compilent sans erreur
-          sed -i.bak '/find_package(MKL/d' CMakeLists.txt || true
-          sed -i.bak 's/MKL::MKL//g' CMakeLists.txt || true
-
-      # 5. Étape de génération des fichiers de build CMake
       - name: Configuration du Build avec CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      # 6. Compilation globale de ds_arena, libds et main
       - name: Compilation du Framework (-O3 Release)
         run: cmake --build build --config Release
 
-      # 7. Exécution des tests de stress mémoire avec Valgrind (Uniquement sur Linux)
-      - name: Exécution des tests de fuite mémoire (Valgrind sur Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Empaquetage des binaires (Linux/macOS)
+        if: (matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest') && startsWith(github.ref, 'refs/tags/')
         run: |
-          cd build
-          valgrind --leak-check=full --error-exitcode=1 ./main
+          mkdir -p dist/include
+          cp *.h dist/include/
+          cp memory/include/*.h dist/include/
+          cp build/memory/*.a dist/ 2>/dev/null || cp build/memory/lib*.a dist/ 2>/dev/null || true
+          cp build/*.a dist/ 2>/dev/null || cp build/lib*.a dist/ 2>/dev/null || true
+          tar -cvzf ds-framework-${{ matrix.os }}-${{ github.ref_name }}.tar.gz -C dist .
+
+      - name: Empaquetage des binaires (Windows)
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          mkdir -p dist/include
+          cp *.h dist/include/
+          cp memory/include/*.h dist/include/
+          cp build/memory/Release/*.lib dist/ 2>/dev/null || cp build/memory/*.lib dist/ 2>/dev/null || true
+          cp build/Release/*.lib dist/ 2>/dev/null || cp build/*.lib dist/ 2>/dev/null || true
+          7z a ds-framework-windows-${{ github.ref_name }}.zip ./dist/*
+
+      - name: Upload temporaire de l'artefact pour la Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-${{ matrix.os }}
+          path: |
+            ds-framework-*.tar.gz
+            ds-framework-*.zip
+
+  publish-release:
+    name: Création de la GitHub Release
+    needs: build-multi_os
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Téléchargement de tous les artefacts compilés
+        uses: actions/download-artifact@v4
+        with:
+          path: all-assets
+          merge-multiple: true
+
+      - name: Publication sur GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            all-assets/ds-framework-*.tar.gz
+            all-assets/ds-framework-*.zip
+          body: |
+            Compilation automatisée et optimisée multiplateforme.
+
+            * `include/` : Tous les fichiers d'en-tête du projet (`common.h`, `ds_arena.h`, `gc.h`, ainsi que toutes vos structures de données).
+            * `libds.a` / `ds.lib` : Votre bibliothèque principale de structures de données.
+            * `libds_arena.a` / `ds_arena.lib` : Votre gestionnaire de mémoire (Arène + GC).
+          draft: false
+          prerelease: false

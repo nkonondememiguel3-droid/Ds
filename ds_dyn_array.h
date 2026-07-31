@@ -7,10 +7,10 @@
 #include "common.h"
 
 // En-tête aligné sur 16 octets pour correspondre parfaitement aux blocs de l'arène
-typedef struct __attribute__((aligned(ARENA_ALIGN))) {
+typedef struct ALIGN16 {
   size_t size_used;
   size_t size;
-} _ds_dyn_array_t_;
+} ALIGN16_POST _ds_dyn_array_t_;
 
 extern void *ds_da_grow(_ds_arena_t_ *a, void *arr, size_t element_size, size_t new_cap);
 

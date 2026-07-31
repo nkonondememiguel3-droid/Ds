@@ -10,11 +10,11 @@ typedef struct _ds_hash_entry_ {
   struct _ds_hash_entry_ *next;
 } _ds_hash_entry_t_;
 
-typedef struct __attribute__((aligned(ARENA_ALIGN))) {
+typedef struct ALIGN16 {
   _ds_hash_entry_t_ **buckets;
   size_t bucket_count;
   size_t size;
-} ds_hash_map_t;
+} ALIGN16_POST ds_hash_map_t;
 
 extern ds_hash_map_t *ds_map_new(_ds_arena_t_ *a, size_t initial_buckets);
 extern void ds_map_put(_ds_arena_t_ *a, ds_hash_map_t *map, ds_string_t *key, ds_node_t value);
