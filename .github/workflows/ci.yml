@@ -3,6 +3,7 @@ name: Framework DS CI/CD
 on:
   push:
     branches: ["main"]
+    tags: ["v*.*.*"]
   pull_request:
     branches: ["main"]
 
@@ -17,19 +18,74 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      # 1. Récupération du code source
       - name: Checkout du dépôt
         uses: actions/checkout@v4
 
-      # 2. Installation de CMake et Ninja (Accélérateur de build multiplateforme)
       - name: Configuration de CMake
         uses: lukka/get-cmake@latest
 
-      # 5. Étape de génération des fichiers de build CMake
       - name: Configuration du Build avec CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      # 6. Compilation globale de ds_arena, libds et main
       - name: Compilation du Framework (-O3 Release)
         run: cmake --build build --config Release
 
+      - name: Empaquetage des binaires (Linux/macOS)
+        if: (matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest') && startsWith(github.ref, 'refs/tags/')
+        run: |
+          mkdir -p dist/include
+          cp *.h dist/include/
+          cp memory/include/*.h dist/include/
+          cp build/memory/*.a dist/ 2>/dev/null || cp build/memory/lib*.a dist/ 2>/dev/null || true
+          cp build/*.a dist/ 2>/dev/null || cp build/lib*.a dist/ 2>/dev/null || true
+          tar -cvzf ds-framework-${{ matrix.os }}-${{ github.ref_name }}.tar.gz -C dist .
+
+      - name: Empaquetage des binaires (Windows)
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          mkdir -p dist/include
+          cp *.h dist/include/
+          cp memory/include/*.h dist/include/
+          cp build/memory/Release/*.lib dist/ 2>/dev/null || cp build/memory/*.lib dist/ 2>/dev/null || true
+          cp build/Release/*.lib dist/ 2>/dev/null || cp build/*.lib dist/ 2>/dev/null || true
+          7z a ds-framework-windows-${{ github.ref_name }}.zip ./dist/*
+
+      - name: Upload temporaire de l'artefact pour la Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-${{ matrix.os }}
+          path: |
+            ds-framework-*.tar.gz
+            ds-framework-*.zip
+
+  publish-release:
+    name: Création de la GitHub Release
+    needs: build-multi_os
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Téléchargement de tous les artefacts compilés
+        uses: actions/download-artifact@v4
+        with:
+          path: all-assets
+          merge-multiple: true
+
+      - name: Publication sur GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            all-assets/ds-framework-*.tar.gz
+            all-assets/ds-framework-*.zip
+          body: |
+            Compilation automatisée et optimisée multiplateforme.
+
+            * `include/` : Tous les fichiers d'en-tête du projet (`common.h`, `ds_arena.h`, `gc.h`, ainsi que toutes vos structures de données).
+            * `libds.a` / `ds.lib` : Votre bibliothèque principale de structures de données.
+            * `libds_arena.a` / `ds_arena.lib` : Votre gestionnaire de mémoire (Arène + GC).
+          draft: false
+          prerelease: false
