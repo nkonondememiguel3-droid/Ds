@@ -7,7 +7,22 @@
 
 #define ARENA_ALIGN 16
 
-typedef enum { TYPE_INT = 0, TYPE_FLOAT = 1, TYPE_BOOL = 2, TYPE_NIL = 3, TYPE_STRING = 4, TYPE_NODE = 5 } NodeType;
+#if defined(_MSC_VER)
+#define ALIGN16 __declspec(align(16))
+#define ALIGN16_POST
+#else
+#define ALIGN16
+#define ALIGN16_POST __attribute__((aligned(ARENA_ALIGN)))
+#endif
+
+typedef enum {
+  TYPE_INT = 0,
+  TYPE_FLOAT = 1,
+  TYPE_BOOL = 2,
+  TYPE_NIL = 3,
+  TYPE_STRING = 4,
+  TYPE_NODE = 5,
+} NodeType;
 
 #define ARENA_TAG_MASK ((uintptr_t)0xF)
 #define ARENA_PTR_MASK (~(uintptr_t)0xF)

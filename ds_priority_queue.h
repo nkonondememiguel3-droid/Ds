@@ -3,9 +3,9 @@
 
 #include "common.h"
 
-typedef struct __attribute__((aligned(ARENA_ALIGN))) {
+typedef struct ALIGN16 {
   ds_node_t *heap_array;
-} ds_priority_queue_t;
+} ALIGN16_POST ds_priority_queue_t;
 
 extern ds_priority_queue_t *ds_pq_new(_ds_arena_t_ *a);
 extern void ds_pq_push(_ds_arena_t_ *a, ds_priority_queue_t *pq, ds_node_t value);

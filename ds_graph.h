@@ -13,9 +13,9 @@ typedef struct _ds_vertex_ {
   struct _ds_vertex_ **neighbors;
 } ds_vertex_t;
 
-typedef struct __attribute__((aligned(ARENA_ALIGN))) {
+typedef struct ALIGN16 {
   ds_list_t *vertices;
-} ds_graph_t;
+} ALIGN16_POST ds_graph_t;
 
 extern ds_graph_t *ds_graph_new(_ds_arena_t_ *a);
 extern ds_vertex_t *ds_graph_add_vertex(_ds_arena_t_ *a, ds_graph_t *graph, const char *id, ds_node_t value);

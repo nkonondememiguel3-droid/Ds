@@ -11,10 +11,10 @@ typedef struct _ds_list_node_ {
   struct _ds_list_node_ *prev;
 } ds_list_node_t;
 
-typedef struct __attribute__((aligned(ARENA_ALIGN))) {
+typedef struct ALIGN16 {
   ds_list_node_t *head;
   size_t length;
-} ds_list_t;
+} ALIGN16_POST ds_list_t;
 
 extern ds_list_t *ds_list_new(_ds_arena_t_ *a);
 extern void ds_list_append(_ds_arena_t_ *a, ds_list_t *list, ds_node_t value);

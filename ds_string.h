@@ -6,10 +6,10 @@
 
 #include "common.h"
 
-typedef struct __attribute__((aligned(ARENA_ALIGN))) {
+typedef struct ALIGN16 {
   size_t length;
   char *data;
-} ds_string_t;
+} ALIGN16_POST ds_string_t;
 
 extern ds_string_t *ds_str_new(_ds_arena_t_ *a, const char *c_str);
 extern ds_string_t *ds_str_new_len(_ds_arena_t_ *a, const char *c_str, size_t len);
