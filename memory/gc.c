@@ -5,7 +5,6 @@
 
 #include "ds_arena.h"
 
-// Finaliseur de MurmurHash3 pour distribution O(1) uniforme et rapide
 static inline size_t ds_ptr_hash(void *ptr, size_t hash_size) {
   uintptr_t x = (uintptr_t)ptr;
   x ^= x >> 33;
@@ -14,16 +13,14 @@ static inline size_t ds_ptr_hash(void *ptr, size_t hash_size) {
   return (size_t)(x & (hash_size - 1));
 }
 
-// Injecteur de marquage non récurrent utilisant la pile interne de l'arène
 void ds_gc_push_mark_stack_context(_ds_arena_t_ *a, ds_node_t node) {
   if (ds_get_type(node) != TYPE_NODE || !ds_get_ptr(node)) return;
 
-  // Croissance géométrique dynamique de la pile de marquage
   if (a->gc_mark_stack_top >= a->gc_mark_stack_cap) {
     size_t new_cap = a->gc_mark_stack_cap ? a->gc_mark_stack_cap * 2 : 1024;
     ds_node_t *new_stack = realloc(a->gc_mark_stack, sizeof(ds_node_t) * new_cap);
     if (!new_stack) {
-      fputs("ds: out of memory in GC stack expansion\n", stderr);
+      fputs("ds: out of memory\n", stderr);
       abort();
     }
     a->gc_mark_stack = new_stack;
@@ -32,9 +29,8 @@ void ds_gc_push_mark_stack_context(_ds_arena_t_ *a, ds_node_t node) {
   a->gc_mark_stack[a->gc_mark_stack_top++] = node;
 }
 
-// Auto-Rehashing automatique de la table de hachage du GC
 static void ds_gc_check_rehash(_ds_arena_t_ *a) {
-  if ((float)a->live_allocations / (float)a->gc_hash_size > 0.75f) {
+  if ((float)a->gc_live_allocations / (float)a->gc_hash_size > 0.75f) {
     size_t old_size = a->gc_hash_size;
     size_t new_size = old_size * 2;
 
@@ -65,19 +61,6 @@ void ds_gc_register_root(_ds_arena_t_ *a, ds_node_t *var_ptr) {
   a->gc_roots = r;
 }
 
-void ds_gc_unregister_root(_ds_arena_t_ *a, ds_node_t *var_ptr) {
-  if (!a || !var_ptr) return;
-  _ds_gc_root_t_ **curr = &a->gc_roots;
-  while (*curr) {
-    _ds_gc_root_t_ *r = *curr;
-    if (r->variable_pointer == var_ptr) {
-      *curr = r->next;
-      return;
-    }
-    curr = &r->next;
-  }
-}
-
 void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size) {
   ds_gc_check_rehash(a);
 
@@ -95,9 +78,9 @@ void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size) {
   track->next = a->gc_buckets[bucket];
   a->gc_buckets[bucket] = track;
 
-  a->live_allocations++;
-  a->live_bytes += size;
-  if (a->live_bytes > a->peak_live_bytes) a->peak_live_bytes = a->live_bytes;
+  a->gc_live_allocations++;
+  a->gc_live_bytes += size;
+  if (a->gc_live_bytes > a->gc_peak_live_bytes) a->gc_peak_live_bytes = a->gc_live_bytes;
 }
 
 void ds_gc_unregister_allocation(_ds_arena_t_ *a, void *ptr) {
@@ -109,8 +92,8 @@ void ds_gc_unregister_allocation(_ds_arena_t_ *a, void *ptr) {
     _ds_allocation_track_t_ *track = *curr;
     if (track->ptr == ptr) {
       *curr = track->next;
-      a->live_allocations--;
-      a->live_bytes -= track->size;
+      a->gc_live_allocations--;
+      a->gc_live_bytes -= track->size;
       free(track);
       return;
     }
@@ -125,7 +108,6 @@ void ds_gc_set_mark_extension(_ds_arena_t_ *a, ds_gc_mark_extension_func func) {
 void ds_arena_run_gc(_ds_arena_t_ *a) {
   if (!a) return;
 
-  // Réinitialisation de la pile de marquage de l'arène (Zéro allocation pendant le GC)
   a->gc_mark_stack_top = 0;
   if (!a->gc_mark_stack) {
     a->gc_mark_stack_cap = 1024;
@@ -144,7 +126,6 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
     root = root->next;
   }
 
-  // Marquage itératif pur à plat (Immunisé contre les Stack Overflows)
   while (a->gc_mark_stack_top > 0) {
     ds_node_t node = a->gc_mark_stack[--a->gc_mark_stack_top];
     void *ptr = ds_get_ptr(node);
@@ -164,13 +145,11 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
 
     if (already_marked) continue;
 
-    // Inversion de contrôle style Lua : l'extension alimente la pile itérative
     if (a->gc_custom_mark_callback) {
       a->gc_custom_mark_callback(node, a);
     }
   }
 
-  // Phase Sweep sécurisée (Pas de Double-Free) apposée au recyclage brut physique direct
   int recycled_count = 0;
   for (size_t i = 0; i < a->gc_hash_size; i++) {
     _ds_allocation_track_t_ **curr = &a->gc_buckets[i];
@@ -179,12 +158,10 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
       if (!track->marked) {
         _ds_allocation_track_t_ *next_track = track->next;
 
-        // Appel du canal physique direct brut (évite d'appeler par hachage récursif)
         ds_arena_recycle_raw(a, track->ptr, track->size);
 
-        // Décomptage unifié étanche
-        a->live_allocations--;
-        a->live_bytes -= track->size;
+        a->gc_live_allocations--;
+        a->gc_live_bytes -= track->size;
 
         *curr = next_track;
         free(track);
