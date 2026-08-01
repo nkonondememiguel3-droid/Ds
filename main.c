@@ -35,15 +35,15 @@ int main() {
   ds_string_t *sub = ds_str_new(&arena, "Chargement");
   int found = ds_str_find(text, sub);
 
-  if (found)
+  if (found != -1)
     printf("%s found in the big text.\n", sub->data);
   else
     printf("%s not found inf the big text.\n", sub->data);
 
-  ds_string_t *old_sub = ds_str_new(&arena, "for");
+  ds_string_t *old_sub = ds_str_new(&arena, "fonction");
   ds_string_t *new_sub = ds_str_new(&arena, "miguel");
-  /* ds_string_t *replae = ds_str_replace(&arena, text, old_sub, new_sub); */
-  /* printf("string replaced : %s\n", replae->data); */
+  ds_string_t *replae = ds_str_replace(&arena, text, old_sub, new_sub);
+  printf("string replaced : %s\n", replae->data);
 
   printf("string length: %zu\n", text->length);
   printf("Original text :\n\t%s", text->data);

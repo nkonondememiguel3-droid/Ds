@@ -252,57 +252,58 @@ ds_string_t *ds_str_trim(_ds_arena_t_ *a, const ds_string_t *src) {
 ds_string_t *ds_str_replace(_ds_arena_t_ *a, const ds_string_t *src, const ds_string_t *old_sub,
                             const ds_string_t *new_sub) {
   if (!src || !old_sub || old_sub->length == 0) return ds_str_dup(a, src);
-  if (!new_sub) new_sub = ds_str_new(a, "");
+  if (!new_sub) {
+    static ds_string_t empty = {0, ""};
+    new_sub = &empty;
+  }
 
-  // 1. Premier passage : Compter le nombre d'occurrences pour calculer la taille finale
   size_t occurrences = 0;
-  int search_idx = 0;
-  ds_string_t remainder = *src;
+  size_t search_offset = 0;
 
-  while ((search_idx = ds_str_find(&remainder, old_sub)) != -1) {
+  while (search_offset + old_sub->length <= src->length) {
+    ds_string_t window;
+    window.data = src->data + search_offset;
+    window.length = src->length - search_offset;
+
+    int match_idx = ds_str_find(&window, old_sub);
+    if (match_idx == -1) break;
+
     occurrences++;
-    size_t offset = (size_t)search_idx + old_sub->length;
-    if (offset >= remainder.length) break;
-    remainder.data += offset;
-    remainder.length -= offset;
+    search_offset += (size_t)match_idx + old_sub->length;
   }
 
   if (occurrences == 0) return ds_str_dup(a, src);
 
-  // Calcul de la taille de la nouvelle chaîne
   size_t final_len = src->length + (occurrences * new_sub->length) - (occurrences * old_sub->length);
   ds_string_t *res = ds_str_new_len(a, NULL, final_len);
 
-  // 2. Deuxième passage : Copier les segments et injecter les remplacements
   char *dest = res->data;
-  remainder = *src;
+  size_t current_pos = 0;
 
-  while (remainder.length > 0) {
-    search_idx = ds_str_find(&remainder, old_sub);
-    if (search_idx == -1) {
-      // Copier le résidu final
-      memcpy(dest, remainder.data, remainder.length);
-      dest += remainder.length;
+  while (current_pos < src->length) {
+    ds_string_t window;
+    window.data = src->data + current_pos;
+    window.length = src->length - current_pos;
+
+    int match_idx = ds_str_find(&window, old_sub);
+    if (match_idx == -1) {
+      size_t remaining_bytes = src->length - current_pos;
+      memcpy(dest, src->data + current_pos, remaining_bytes);
+      dest += remaining_bytes;
       break;
     }
 
-    // Copier la partie avant la correspondance
-    if (search_idx > 0) {
-      memcpy(dest, remainder.data, (size_t)search_idx);
-      dest += search_idx;
+    if (match_idx > 0) {
+      memcpy(dest, src->data + current_pos, (size_t)match_idx);
+      dest += match_idx;
     }
 
-    // Injecter la nouvelle sous-chaîne
     if (new_sub->length > 0) {
       memcpy(dest, new_sub->data, new_sub->length);
       dest += new_sub->length;
     }
 
-    // Avancer au-delà du délimiteur remplacé
-    size_t offset = (size_t)search_idx + old_sub->length;
-    if (offset >= remainder.length) break;
-    remainder.data += offset;
-    remainder.length -= offset;
+    current_pos += (size_t)match_idx + old_sub->length;
   }
   *dest = '\0';
 

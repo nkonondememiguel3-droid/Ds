@@ -1,6 +1,7 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -33,9 +34,9 @@ static inline NodeType ds_get_type(ds_node_t n) { return (NodeType)(n & ARENA_TA
 static inline void *ds_get_ptr(ds_node_t n) { return (void *)(n & ARENA_PTR_MASK); }
 static inline ds_node_t ds_tag_ptr(void *ptr, NodeType type) { return (ds_node_t)ptr | type; }
 static inline ds_node_t ds_make_int(int val) { return ((uintptr_t)val << 4) | TYPE_INT; }
-
 static inline int ds_unpack_int(ds_node_t node) { return (int)((intptr_t)node >> 4); }
 
+// --- PRIMITIVES FLOAT RESTAURÉES ---
 static inline ds_node_t ds_make_float(float val) {
   uint32_t bits;
   memcpy(&bits, &val, sizeof(bits));
@@ -49,39 +50,48 @@ static inline float ds_unpack_float(ds_node_t node) {
   return f;
 }
 
-typedef struct _ds_free_cell_ {
-  ds_node_t next_free;
-} _ds_free_cell_t_;
-
-typedef void *(*ds_mem_alloc_func)(size_t bytes, void *user_data);
-typedef void *(*ds_mem_realloc_func)(void *ptr, size_t new_size, void *user_data);
-typedef void (*ds_mem_free_func)(void *ptr, void *user_data);
-
-typedef struct {
-  ds_mem_alloc_func alloc;
-  ds_mem_realloc_func realloc;
-  ds_mem_free_func free;
-  void *context;
-} _adjust_memory_interface_t_;
-
-typedef struct __ds_arena_chunk__ {
-  struct __ds_arena_chunk__ *next_arena_chunk;
-  size_t chunk_size;
-  size_t chunk_size_used;
-} _ds_arena_chunk_t_;
-
+// Maillon de Free-List externe
 typedef struct _ds_free_block_ {
   void *address;
+  size_t size;
   struct _ds_free_block_ *next;
 } _ds_free_block_t_;
 
+// --- CORRECTION BUG : EXPANSION DU TRACKER POUR STOCKER LA TAILLE ---
+typedef struct _ds_allocation_track_ {
+  void *ptr;
+  size_t size;  // Capturé à l'alloc, restitré au sweep
+  uint8_t marked;
+  struct _ds_allocation_track_ *next;
+} _ds_allocation_track_t_;
+
+typedef struct _ds_gc_root_ {
+  ds_node_t *variable_pointer;
+  struct _ds_gc_root_ *next;
+} _ds_gc_root_t_;
+
+typedef void (*ds_gc_mark_extension_func)(ds_node_t node);
+
+// --- CORRECTION BUG : ALIGNEMENT STRICT DU HEADER DE CHUNK (32 octets) ---
+typedef struct __ds_arena_chunk__ {
+  struct __ds_arena_chunk__ *next_arena_chunk;  // 8 octets
+  size_t chunk_size;                            // 8 octets
+  size_t chunk_size_used;                       // 8 octets
+  size_t padding;                               // 8 octets -> TOTAL = 32 (Multiple de 16)
+} _ds_arena_chunk_t_;
+
 typedef struct {
   _ds_arena_chunk_t_ *head;
-  _adjust_memory_interface_t_ imemory;
   size_t chunk_size;
 
   _ds_free_block_t_ *free_list_head;
 
+  // Contexte GC par-arène
+  _ds_gc_root_t_ *gc_roots;
+  _ds_allocation_track_t_ *gc_allocs;
+  ds_gc_mark_extension_func gc_custom_mark_callback;
+
+  // Télémétrie
   size_t allocs_from_bump;
   size_t allocs_from_free_list;
 } _ds_arena_t_;

@@ -6,7 +6,6 @@
 
 #include "common.h"
 
-// En-tête aligné sur 16 octets pour correspondre parfaitement aux blocs de l'arène
 typedef struct ALIGN16 {
   size_t size_used;
   size_t size;
@@ -26,24 +25,22 @@ extern void *ds_da_grow(_ds_arena_t_ *a, void *arr, size_t element_size, size_t 
       size_t _nc = ds_da_cap(arr) ? ds_da_cap(arr) * 2 : 8; \
       if (_nc < _mc) _nc = _mc;                             \
                                                             \
-      (arr) = ds_da_grow((a), (arr), sizeof(*(arr)), _nc);  \
+      arr = ds_da_grow((a), (arr), sizeof(*(arr)), _nc);    \
     }                                                       \
   } while (0)
 
 #define ds_da_push(a, arr, val)                    \
   do {                                             \
     ds_da_reserve((a), (arr), ds_da_len(arr) + 1); \
-    (arr)[ds_da_hdr(arr)->size_used++] = (val);    \
+    size_t _idx = ds_da_hdr(arr)->size_used;       \
+    (arr)[_idx] = (val);                           \
+    ds_da_hdr(arr)->size_used = _idx + 1;          \
   } while (0)
 
 #define ds_da_pop(arr) (assert(ds_da_len(arr) > 0), (arr)[--ds_da_hdr(arr)->size_used])
-
 #define ds_da_clear(arr)                    \
   do {                                      \
     if (arr) ds_da_hdr(arr)->size_used = 0; \
   } while (0)
-
-#define ds_da_last(arr) ((arr)[ds_da_len(arr) - 1])
-#define ds_da_at(arr, i) ((arr)[(i)])
 
 #endif  // ds_dynamic_array_h

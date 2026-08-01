@@ -68,20 +68,21 @@ bool ds_graph_remove_vertex(_ds_arena_t_ *a, ds_graph_t *graph, const char *id) 
 
     ds_vertex_t *v = (ds_vertex_t *)ds_get_ptr(curr->value);
     if (v && v->id) {
-      // DÉPAQUETAGE REQUIS ICI AUSSI pour éviter le SIGSEGV à l'adresse 0x8
       ds_string_t *actual_id = (ds_string_t *)ds_get_ptr((ds_node_t)v->id);
       if (actual_id && actual_id->data) {
         if (strcmp(actual_id->data, id) == 0) {
-          // 1. Retirer le maillon du sommet de la liste circulaire du graphe
+          // 1. Retirer le maillon de la liste circulaire
           ds_list_remove(a, graph->vertices, curr);
 
-          // 2. Recycler le tableau dynamique de voisins s'il a été alloué
+          // 2. Recycler le tableau dynamique de voisins avec sa TAILLE RÉELLE
           if (v->neighbors) {
-            ds_arena_recycle(a, ds_da_hdr(v->neighbors));
+            _ds_dyn_array_t_ *old_hdr = ds_da_hdr(v->neighbors);
+            size_t old_alloc_size = sizeof(_ds_dyn_array_t_) + (old_hdr->size * sizeof(ds_vertex_t *));
+            ds_arena_recycle(a, old_hdr, old_alloc_size);
           }
 
-          // 3. Recycler le sommet lui-même
-          ds_arena_recycle(a, v);
+          // 3. Recycler le sommet lui-même avec sa taille stricte
+          ds_arena_recycle(a, v, sizeof(ds_vertex_t));
           return true;
         }
       }
