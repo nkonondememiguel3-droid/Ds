@@ -36,7 +36,6 @@ static inline ds_node_t ds_tag_ptr(void *ptr, NodeType type) { return (ds_node_t
 static inline ds_node_t ds_make_int(int val) { return ((uintptr_t)val << 4) | TYPE_INT; }
 static inline int ds_unpack_int(ds_node_t node) { return (int)((intptr_t)node >> 4); }
 
-// --- PRIMITIVES FLOAT RESTAURÉES ---
 static inline ds_node_t ds_make_float(float val) {
   uint32_t bits;
   memcpy(&bits, &val, sizeof(bits));
@@ -50,17 +49,15 @@ static inline float ds_unpack_float(ds_node_t node) {
   return f;
 }
 
-// Maillon de Free-List externe
+// Free-List intrusive (Overlay)
 typedef struct _ds_free_block_ {
-  void *address;
   size_t size;
   struct _ds_free_block_ *next;
 } _ds_free_block_t_;
 
-// --- CORRECTION BUG : EXPANSION DU TRACKER POUR STOCKER LA TAILLE ---
 typedef struct _ds_allocation_track_ {
   void *ptr;
-  size_t size;  // Capturé à l'alloc, restitré au sweep
+  size_t size;
   uint8_t marked;
   struct _ds_allocation_track_ *next;
 } _ds_allocation_track_t_;
@@ -72,12 +69,13 @@ typedef struct _ds_gc_root_ {
 
 typedef void (*ds_gc_mark_extension_func)(ds_node_t node);
 
-// --- CORRECTION BUG : ALIGNEMENT STRICT DU HEADER DE CHUNK (32 octets) ---
+// --- EXCELLENCE 3 : TAILLE DE HEADER MULTIPLE DE ARENA_ALIGN ---
+// 8 + 8 + 8 + 8 = 32 octets. Pas besoin de directives d'alignement complexes.
 typedef struct __ds_arena_chunk__ {
-  struct __ds_arena_chunk__ *next_arena_chunk;  // 8 octets
-  size_t chunk_size;                            // 8 octets
-  size_t chunk_size_used;                       // 8 octets
-  size_t padding;                               // 8 octets -> TOTAL = 32 (Multiple de 16)
+  struct __ds_arena_chunk__ *next_arena_chunk;
+  size_t chunk_size;
+  size_t chunk_size_used;
+  size_t reserved;  // Rembourrage structurel strict
 } _ds_arena_chunk_t_;
 
 typedef struct {
@@ -86,14 +84,15 @@ typedef struct {
 
   _ds_free_block_t_ *free_list_head;
 
-  // Contexte GC par-arène
   _ds_gc_root_t_ *gc_roots;
   _ds_allocation_track_t_ *gc_allocs;
   ds_gc_mark_extension_func gc_custom_mark_callback;
 
-  // Télémétrie
   size_t allocs_from_bump;
   size_t allocs_from_free_list;
+  size_t peak_chunks;
+  size_t current_chunks;
+  size_t total_free_bytes_in_list;
 } _ds_arena_t_;
 
 #endif

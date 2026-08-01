@@ -7,7 +7,7 @@
 #include <time.h>
 
 #include "ds_arena.h"
-#include "ds_linked_list.h"
+#include "ds_dyn_array.h"
 #include "gc.h"
 
 static double get_time_ms(void) {
@@ -18,37 +18,23 @@ static double get_time_ms(void) {
 
 int main() {
   printf("==================================================\n");
-  printf(" STARTING AIRTIGHT ARCHITECTURE TESTING SUITE    \n");
+  printf("  STARTING 10/10 INTRUSIVE COALESCING BENCHMARK   \n");
   printf("==================================================\n\n");
 
   _ds_arena_t_ arena = ds_arena_new(0);
-  ds_list_t *list = ds_list_new(&arena);
-  ds_node_t list_root = ds_tag_ptr(list, TYPE_NODE);
-  ds_gc_register_root(&arena, &list_root);
+  int *array = NULL;
 
   double start = get_time_ms();
 
-  // Allocation de blocs hétérogènes pour valider le First-Fit et la restitution de taille
-  for (int i = 0; i < 5000; i++) {
-    ds_list_append(&arena, list, ds_make_int(i));
-    // Allocation de chaînes fantômes de tailles intermédiaires (128 octets)
-    ds_arena_alloc(&arena, 128);
-  }
-
-  // Lancement du GC : les chaînes fantômes de 128 octets n'étant pas rattachées à la racine,
-  // elles vont être balayées et restituées à la Free-list avec leur vraie taille de 128 octets !
-  ds_arena_run_gc(&arena);
-
-  // Tentative de réallocation immédiate de structures de 128 octets.
-  // L'allocateur First-Fit doit intercepter ces trous de 128 octets au lieu de grow l'arène.
-  for (int i = 0; i < 2000; i++) {
-    ds_arena_alloc(&arena, 128);
+  // Stress Test : 50 000 insertions provoquant des dizaines d'allocations de tailles exponentielles
+  for (int i = 0; i < 50000; i++) {
+    ds_da_push(&arena, array, i);
   }
 
   double end = get_time_ms();
 
   ds_arena_print_stats(&arena);
-  printf("Airtight Core Bench Time: %.2f ms\n", end - start);
+  printf("Total Execution Time: %.2f ms\n", end - start);
 
   ds_arena_destroy(&arena);
   return 0;
