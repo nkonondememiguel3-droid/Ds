@@ -1,15 +1,17 @@
 #ifndef ds_string_h
 #define ds_string_h
 
-#include <stdarg.h>
+#include <stdalign.h>  // Standard C11 pour alignas
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "common.h"
 
-typedef struct ALIGN16 {
-  size_t length;
+// Correction syntaxe C11 : alignas(16) appliqué de manière native et standard
+typedef struct {
+  alignas(16) size_t length;
   char *data;
-} ALIGN16_POST ds_string_t;
+} ds_string_t;
 
 extern ds_string_t *ds_str_new(_ds_arena_t_ *a, const char *c_str);
 extern ds_string_t *ds_str_new_len(_ds_arena_t_ *a, const char *c_str, size_t len);

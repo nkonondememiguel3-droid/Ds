@@ -1,6 +1,7 @@
 #ifndef ds_linked_list_h
 #define ds_linked_list_h
 
+#include <stdalign.h>
 #include <stdbool.h>
 
 #include "common.h"
@@ -11,10 +12,10 @@ typedef struct _ds_list_node_ {
   struct _ds_list_node_ *prev;
 } ds_list_node_t;
 
-typedef struct ALIGN16 {
-  ds_list_node_t *head;
+typedef struct {
+  alignas(16) ds_list_node_t *head;
   size_t length;
-} ALIGN16_POST ds_list_t;
+} ds_list_t;
 
 extern ds_list_t *ds_list_new(_ds_arena_t_ *a);
 extern void ds_list_append(_ds_arena_t_ *a, ds_list_t *list, ds_node_t value);

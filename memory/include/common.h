@@ -7,6 +7,7 @@
 #include <string.h>
 
 #define ARENA_ALIGN 16
+#define GC_HASH_SIZE 1024  // Configuration de base de la table
 
 #if defined(_MSC_VER)
 #define ALIGN16 __declspec(align(16))
@@ -49,7 +50,7 @@ static inline float ds_unpack_float(ds_node_t node) {
   return f;
 }
 
-// Free-List intrusive (Overlay)
+// Free-List intrusive
 typedef struct _ds_free_block_ {
   size_t size;
   struct _ds_free_block_ *next;
@@ -67,32 +68,44 @@ typedef struct _ds_gc_root_ {
   struct _ds_gc_root_ *next;
 } _ds_gc_root_t_;
 
-typedef void (*ds_gc_mark_extension_func)(ds_node_t node);
+struct __ds_arena__;
+typedef void (*ds_gc_mark_extension_func)(ds_node_t node, struct __ds_arena__ *a);
 
-// --- EXCELLENCE 3 : TAILLE DE HEADER MULTIPLE DE ARENA_ALIGN ---
-// 8 + 8 + 8 + 8 = 32 octets. Pas besoin de directives d'alignement complexes.
+// Taille de header de chunk calibrée sur un multiple exact de ARENA_ALIGN (32 octets)
+// pour garantir l'alignement binaire inviolable du payload utilisateur.
 typedef struct __ds_arena_chunk__ {
   struct __ds_arena_chunk__ *next_arena_chunk;
   size_t chunk_size;
   size_t chunk_size_used;
-  size_t reserved;  // Rembourrage structurel strict
+  size_t reserved;
 } _ds_arena_chunk_t_;
 
-typedef struct {
+typedef struct __ds_arena__ {
   _ds_arena_chunk_t_ *head;
   size_t chunk_size;
 
   _ds_free_block_t_ *free_list_head;
 
+  // --- CHAMPS DU GC CONTEXTUELS ET EXTENSIBLES SÉCURISÉS ---
+  _ds_allocation_track_t_ **gc_buckets;
+  size_t gc_hash_size;
   _ds_gc_root_t_ *gc_roots;
-  _ds_allocation_track_t_ *gc_allocs;
   ds_gc_mark_extension_func gc_custom_mark_callback;
 
+  // Pile de marquage persistante par-arène
+  ds_node_t *gc_mark_stack;
+  size_t gc_mark_stack_top;
+  size_t gc_mark_stack_cap;
+
+  // Télémétrie étendue de production
   size_t allocs_from_bump;
   size_t allocs_from_free_list;
   size_t peak_chunks;
   size_t current_chunks;
   size_t total_free_bytes_in_list;
+  size_t live_allocations;
+  size_t live_bytes;
+  size_t peak_live_bytes;
 } _ds_arena_t_;
 
 #endif

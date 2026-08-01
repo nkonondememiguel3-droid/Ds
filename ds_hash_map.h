@@ -1,6 +1,7 @@
 #ifndef ds_hash_map_h
 #define ds_hash_map_h
 
+#include <stdalign.h>
 #include "common.h"
 #include "ds_string.h"
 
@@ -10,11 +11,11 @@ typedef struct _ds_hash_entry_ {
   struct _ds_hash_entry_ *next;
 } _ds_hash_entry_t_;
 
-typedef struct ALIGN16 {
-  _ds_hash_entry_t_ **buckets;
+typedef struct {
+  alignas(16) _ds_hash_entry_t_ **buckets;
   size_t bucket_count;
   size_t size;
-} ALIGN16_POST ds_hash_map_t;
+} ds_hash_map_t;
 
 extern ds_hash_map_t *ds_map_new(_ds_arena_t_ *a, size_t initial_buckets);
 extern void ds_map_put(_ds_arena_t_ *a, ds_hash_map_t *map, ds_string_t *key, ds_node_t value);
