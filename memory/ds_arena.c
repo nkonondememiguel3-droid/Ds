@@ -4,16 +4,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "common.h"
 #include "gc.h"
 
 inline size_t ds_arena_align_up(size_t n) { return (n + (ARENA_ALIGN - 1)) & ~(size_t)(ARENA_ALIGN - 1); }
 
-_ds_arena_t_ ds_arena_new(size_t chunk_size) {
-  _ds_arena_t_ a = {0};
-  a.chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE;
-  a.gc_hash_size = GC_HASH_SIZE;
-  a.gc_buckets = (_ds_allocation_track_t_ **)calloc(a.gc_hash_size, sizeof(_ds_allocation_track_t_ *));
-  if (!a.gc_buckets) {
+_ds_arena_t_ *ds_arena_new(size_t chunk_size) {
+  _ds_arena_t_ *a = (_ds_arena_t_ *)malloc(sizeof(_ds_arena_t_));
+  if (!a) {
+    fputs("ds: out of memory for arena shell\n", stderr);
+    abort();
+  }
+  memset(a, 0, sizeof(_ds_arena_t_));
+
+  a->chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE;
+  a->gc_hash_size = GC_HASH_SIZE;  // Toujours une puissance de 2
+  a->gc_buckets = (_ds_allocation_track_t_ **)calloc(a->gc_hash_size, sizeof(_ds_allocation_track_t_ *));
+  if (!a->gc_buckets) {
     fputs("ds: out of memory\n", stderr);
     abort();
   }
@@ -42,7 +49,7 @@ static inline _ds_arena_chunk_t_ *ds_arena_grow(_ds_arena_t_ *a, size_t needed) 
   return c;
 }
 
-void *ds_arena_alloc_raw(_ds_arena_t_ *a, size_t size) {
+static void *ds_arena_alloc_base(_ds_arena_t_ *a, size_t size) {
   if (size < ARENA_ALIGN) size = ARENA_ALIGN;
   size = ds_arena_align_up(size);
 
@@ -58,18 +65,16 @@ void *ds_arena_alloc_raw(_ds_arena_t_ *a, size_t size) {
         remainder->size = curr->size - size;
         remainder->next = curr->next;
 
-        if (prev) {
+        if (prev)
           prev->next = remainder;
-        } else {
+        else
           a->free_list_head = remainder;
-        }
       } else {
         size = curr->size;
-        if (prev) {
+        if (prev)
           prev->next = curr->next;
-        } else {
+        else
           a->free_list_head = curr->next;
-        }
       }
 
       a->total_free_bytes_in_list -= size;
@@ -93,12 +98,16 @@ void *ds_arena_alloc_raw(_ds_arena_t_ *a, size_t size) {
   return ptr;
 }
 
-void *ds_arena_alloc_untracked(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_raw(a, size); }
+void *ds_arena_alloc_internal(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_base(a, size); }
+
+void *ds_arena_alloc_raw(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_base(a, size); }
+
+void *ds_arena_alloc_untracked(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_base(a, size); }
 
 void *ds_arena_alloc(_ds_arena_t_ *a, size_t size) {
   if (size < ARENA_ALIGN) size = ARENA_ALIGN;
   size = ds_arena_align_up(size);
-  void *ptr = ds_arena_alloc_raw(a, size);
+  void *ptr = ds_arena_alloc_base(a, size);
   ds_gc_register_allocation(a, ptr, size);
   return ptr;
 }
@@ -146,7 +155,6 @@ void ds_arena_recycle(_ds_arena_t_ *a, void *dead_ptr, size_t size) {
 void ds_arena_destroy(_ds_arena_t_ *a) {
   if (!a) return;
 
-  // 1. Libération de la table de hachage du GC (Mémoire externe)
   if (a->gc_buckets) {
     for (size_t i = 0; i < a->gc_hash_size; i++) {
       _ds_allocation_track_t_ *curr_alloc = a->gc_buckets[i];
@@ -159,26 +167,21 @@ void ds_arena_destroy(_ds_arena_t_ *a) {
     free(a->gc_buckets);
   }
 
-  // 2. Libération de la pile de marquage persistante du GC (Mémoire externe)
   if (a->gc_mark_stack) {
     free(a->gc_mark_stack);
   }
 
-  // --- CORRECTIF COMPLET DES NOEUDS INTRUSIFS EN CHUNKS ---
-  // Les maillons de la free-list résident à l'intérieur des blocs physiques.
-  // Aucun free() individuel pour éviter d'invalider le tas système.
+  a->gc_roots = NULL;
   a->free_list_head = NULL;
 
-  // 3. Libération unifiée des chunks parents
   _ds_arena_chunk_t_ *c = a->head;
   while (c) {
     _ds_arena_chunk_t_ *next = c->next_arena_chunk;
     free(c);
-    a->current_chunks--;
     c = next;
   }
 
-  memset(a, 0, sizeof(_ds_arena_t_));
+  free(a);
 }
 
 void ds_arena_print_stats(const _ds_arena_t_ *a) {
@@ -208,7 +211,7 @@ void ds_arena_print_stats(const _ds_arena_t_ *a) {
   printf("     RAPPORT DE TÉLÉMÉTRIE INDUSTRIALISÉ          \n");
   printf("==================================================\n");
   printf("Allocations neuves (Bump Pointer)   : %zu\n", a->allocs_from_bump);
-  printf("Allocations recyclées (Free-List)   : %zu\n", a->allocs_from_free_list);
+  printf("Allocations issues de Free-List     : %zu\n", a->allocs_from_free_list);
   printf("Total des demandes de mémoire       : %zu\n", total_demands);
   printf("--------------------------------------------------\n");
   printf("Chunks actifs au système (Current)  : %zu\n", a->current_chunks);

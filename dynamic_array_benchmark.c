@@ -10,15 +10,20 @@
 
 typedef struct {
   ds_node_t child;
-} Node;
+  ds_node_t label;
+} ElementNode;
 
-void custom_node_mark_extension(ds_node_t node, _ds_arena_t_ *a) {
+// Extension de marquage itérative non récursive pour le graphe cyclique
+void custom_container_mark_extension(ds_node_t node, _ds_arena_t_ *a) {
   void *ptr = ds_get_ptr(node);
   if (!ptr) return;
 
-  Node *n = (Node *)ptr;
+  ElementNode *n = (ElementNode *)ptr;
   if (n->child) {
     ds_gc_push_mark_stack_context(a, n->child);
+  }
+  if (n->label) {
+    ds_gc_push_mark_stack_context(a, n->label);
   }
 }
 
@@ -30,37 +35,45 @@ static double get_time_ms(void) {
 
 int main() {
   printf("==================================================\n");
-  printf("  STARTING 10/10 INDUSTRIAL MANAGED GC BENCHMARK \n");
+  printf("  BANC D'ESSAI DES CONTENEURS : GESTION DES CYCLES \n");
   printf("==================================================\n\n");
 
-  // CORRIGÉ : Utilisation du bon alias de type _ds_arena_t_
-  _ds_arena_t_ arena = ds_arena_new(0);
-  ds_gc_set_mark_extension(&arena, custom_node_mark_extension);
+  _ds_arena_t_ *arena = ds_arena_new(0);
+  ds_gc_set_mark_extension(arena, custom_container_mark_extension);
 
-  ds_node_t root;
   double start = get_time_ms();
 
-  Node *node_a = ARENA_NEW(&arena, Node);
-  Node *node_b = ARENA_NEW(&arena, Node);
+  // 1. ALLOCATION D'UN GRAPH CYCLIQUE ET DE SON LIBELLÉ
+  ElementNode *el_a = ARENA_NEW(arena, ElementNode);
+  ElementNode *el_b = ARENA_NEW(arena, ElementNode);
+  void *string_payload = ds_arena_alloc_raw(arena, 64);
 
-  root = ds_tag_ptr(node_a, TYPE_NODE);
-  node_a->child = ds_tag_ptr(node_b, TYPE_NODE);
+  el_a->child = ds_tag_ptr(el_b, TYPE_NODE);
+  el_a->label = ds_tag_ptr(string_payload, TYPE_STRING);
+  el_b->child = ds_tag_ptr(el_a, TYPE_NODE);  // Cycle de référence fermé (A -> B -> A)
 
-  ds_gc_register_root(&arena, &root);
+  // Enregistrement de la racine via l'API historique stabilisée
+  ds_node_t root = ds_tag_ptr(el_a, TYPE_NODE);
+  ds_gc_register_root(arena, &root);
 
+  // Génération de 5000 structures éphémères orphelines pour stresser le Sweep
   for (int i = 0; i < 5000; i++) {
-    ARENA_NEW(&arena, Node);
+    ARENA_NEW(arena, ElementNode);
   }
 
-  ds_arena_run_gc(&arena);
+  printf("--- PREMIER PASSAGE : Le cycle est référencé par la Racine ---\n");
+  ds_arena_run_gc(arena);
+  ds_arena_print_stats(arena);  // el_a, el_b et la String survivent fidèlement au traçage
+
+  printf("--- SECOND PASSAGE : Rupture de la Racine (Rupture du lien) ---\n");
+  root = (ds_node_t)0;     // Déconnexion
+  ds_arena_run_gc(arena);  // Le cycle et la String deviennent orphelins et sont balayés
+  ds_arena_print_stats(arena);
 
   double end = get_time_ms();
-
-  ds_arena_print_stats(&arena);
   printf("Total Execution Time: %.2f ms\n", end - start);
 
-  ds_arena_destroy(&arena);
-
-  printf("\n[Succès] L'arène s'est détruite de manière étanche.\n");
+  ds_arena_destroy(arena);
+  printf("[Succès] Destruction de l'infrastructure achevée.\n");
   return 0;
 }

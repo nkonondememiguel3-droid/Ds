@@ -3,13 +3,12 @@
 #include "common.h"
 #include "ds_arena.h"
 #include "ds_string.h"
-#include "gc.h"
 
 int main() {
-  _ds_arena_t_ arena = ds_arena_new(0);
+  _ds_arena_t_ *arena = ds_arena_new(0);
 
   ds_string_t *text = ds_str_new(
-      &arena,
+      arena,
       "La fonction ds_str_find actuelle parcourt la chaîne caractère par caractère, ce qui provoque de nombreux échecs "
       "de prédiction de branchement (branch mispredictions). Avec AVX2, nous chargeons 32 caractères de la chaîne d'un "
       "coup et nous les comparons simultanément avec le premier caractère de la sous-chaîne recherchée en générant un "
@@ -32,7 +31,7 @@ int main() {
       "for (; i <= limit; i++) { if (h_data[i] == first_char && memcmp(h_data + i, n_data, n_len) == 0) { return "
       "(int)i; } } return -1; // Non trouvé }\0");
 
-  ds_string_t *sub = ds_str_new(&arena, "Chargement");
+  ds_string_t *sub = ds_str_new(arena, "Chargement");
   int found = ds_str_find(text, sub);
 
   if (found != -1)
@@ -40,13 +39,13 @@ int main() {
   else
     printf("%s not found inf the big text.\n", sub->data);
 
-  ds_string_t *old_sub = ds_str_new(&arena, "fonction");
-  ds_string_t *new_sub = ds_str_new(&arena, "miguel");
-  ds_string_t *replae = ds_str_replace(&arena, text, old_sub, new_sub);
+  ds_string_t *old_sub = ds_str_new(arena, "fonction");
+  ds_string_t *new_sub = ds_str_new(arena, "miguel");
+  ds_string_t *replae = ds_str_replace(arena, text, old_sub, new_sub);
   printf("string replaced : %s\n", replae->data);
 
   printf("string length: %zu\n", text->length);
   printf("Original text :\n\t%s", text->data);
 
-  ds_arena_destroy(&arena);
+  ds_arena_destroy(arena);
 }

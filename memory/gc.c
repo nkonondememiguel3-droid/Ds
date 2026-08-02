@@ -14,7 +14,11 @@ static inline size_t ds_ptr_hash(void *ptr, size_t hash_size) {
 }
 
 void ds_gc_push_mark_stack_context(_ds_arena_t_ *a, ds_node_t node) {
-  if (ds_get_type(node) != TYPE_NODE || !ds_get_ptr(node)) return;
+  // --- CORRECTIF CORRESPONDANCE DES TYPES SÉMANTIQUES DU TYPE-SYSTEM ACTUALISÉ ---
+  NodeType type = ds_get_type(node);
+  if (type != TYPE_NODE && type != TYPE_STRING) return;
+  void *ptr = ds_get_ptr(node);
+  if (!ptr) return;
 
   if (a->gc_mark_stack_top >= a->gc_mark_stack_cap) {
     size_t new_cap = a->gc_mark_stack_cap ? a->gc_mark_stack_cap * 2 : 1024;
@@ -145,7 +149,7 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
 
     if (already_marked) continue;
 
-    if (a->gc_custom_mark_callback) {
+    if (ds_get_type(node) == TYPE_NODE && a->gc_custom_mark_callback) {
       a->gc_custom_mark_callback(node, a);
     }
   }

@@ -7,9 +7,8 @@
 #include <string.h>
 
 #define ARENA_ALIGN 16
-#define GC_HASH_SIZE 1024  // Doit être une puissance de deux
+#define GC_HASH_SIZE 1024
 
-// --- EXCELLENCE 4 : VALIDATION STATIQUE COMPILATION PUISSANCE DE DEUX ---
 _Static_assert((GC_HASH_SIZE & (GC_HASH_SIZE - 1)) == 0, "GC_HASH_SIZE must be a power of two");
 
 #if defined(_MSC_VER)

@@ -3,7 +3,7 @@
 
 #include <assert.h>
 #include <stdalign.h>
-#include <stdatomic.h>  // Pour la barrière portable ISO C11
+#include <stdatomic.h>
 #include <stdio.h>
 
 #include "common.h"
