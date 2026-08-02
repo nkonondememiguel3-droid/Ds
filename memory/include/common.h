@@ -26,16 +26,16 @@ typedef enum {
   TYPE_NIL = 3,
   TYPE_STRING = 4,
   TYPE_NODE = 5,
-} NodeType;
+} ds_type_t;
 
 #define ARENA_TAG_MASK ((uintptr_t)0xF)
 #define ARENA_PTR_MASK (~(uintptr_t)0xF)
 
 typedef uintptr_t ds_node_t;
 
-static inline NodeType ds_get_type(ds_node_t n) { return (NodeType)(n & ARENA_TAG_MASK); }
+static inline ds_type_t ds_get_type(ds_node_t n) { return (ds_type_t)(n & ARENA_TAG_MASK); }
 static inline void *ds_get_ptr(ds_node_t n) { return (void *)(n & ARENA_PTR_MASK); }
-static inline ds_node_t ds_tag_ptr(void *ptr, NodeType type) { return (ds_node_t)ptr | type; }
+static inline ds_node_t ds_tag_ptr(void *ptr, ds_type_t type) { return (ds_node_t)ptr | type; }
 static inline ds_node_t ds_make_int(int val) { return ((uintptr_t)val << 4) | TYPE_INT; }
 static inline int ds_unpack_int(ds_node_t node) { return (int)((intptr_t)node >> 4); }
 
@@ -44,6 +44,8 @@ static inline ds_node_t ds_make_float(float val) {
   memcpy(&bits, &val, sizeof(bits));
   return ((uintptr_t)bits << 4) | TYPE_FLOAT;
 }
+
+static inline ds_node_t ds_make_float_from_bits(uint32_t bits) { return ((uintptr_t)bits << 4) | TYPE_FLOAT; }
 
 static inline float ds_unpack_float(ds_node_t node) {
   uint32_t bits = (uint32_t)(node >> 4);
@@ -58,10 +60,18 @@ typedef struct _ds_free_block_ {
   struct _ds_free_block_ *next;
 } _ds_free_block_t_;
 
+typedef struct _ds_arena_chunk_t_ _ds_arena_chunk_t_;
+typedef struct __ds_arena__ _ds_arena_t_;
+
+typedef struct {
+  void (*mark)(ds_node_t node, _ds_arena_t_ *a);
+} ds_type_descriptor_t;
+
 typedef struct _ds_allocation_track_ {
   void *ptr;
   size_t size;
   uint8_t marked;
+  ds_type_descriptor_t *descriptor;
   struct _ds_allocation_track_ *next;
 } _ds_allocation_track_t_;
 
@@ -70,12 +80,8 @@ typedef struct _ds_gc_root_ {
   struct _ds_gc_root_ *next;
 } _ds_gc_root_t_;
 
-struct __ds_arena__;
-typedef void (*ds_gc_mark_extension_func)(ds_node_t node, struct __ds_arena__ *a);
-
-// Taille de header de chunk calibrée sur un multiple exact de ARENA_ALIGN (32 octets)
-typedef struct __ds_arena_chunk__ {
-  struct __ds_arena_chunk__ *next_arena_chunk;
+typedef struct _ds_arena_chunk_t_ {
+  struct _ds_arena_chunk_t_ *next_arena_chunk;
   size_t chunk_size;
   size_t chunk_size_used;
   size_t reserved;
@@ -87,25 +93,20 @@ typedef struct __ds_arena__ {
 
   _ds_free_block_t_ *free_list_head;
 
-  // Champs de la table de hachage du GC
   _ds_allocation_track_t_ **gc_buckets;
   size_t gc_hash_size;
   _ds_gc_root_t_ *gc_roots;
-  ds_gc_mark_extension_func gc_custom_mark_callback;
 
-  // Pile de marquage persistante par-arène
   ds_node_t *gc_mark_stack;
   size_t gc_mark_stack_top;
   size_t gc_mark_stack_cap;
 
-  // Télémétrie étendue réadaptée au périmètre managé
   size_t allocs_from_bump;
   size_t allocs_from_free_list;
   size_t peak_chunks;
   size_t current_chunks;
   size_t total_free_bytes_in_list;
 
-  // --- AMÉLIORATION SÉMANTIQUE : CLARIFICATION DU PÉRIMÈTRE GC ---
   size_t gc_live_allocations;
   size_t gc_live_bytes;
   size_t gc_peak_live_bytes;

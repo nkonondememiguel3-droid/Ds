@@ -18,7 +18,7 @@ _ds_arena_t_ *ds_arena_new(size_t chunk_size) {
   memset(a, 0, sizeof(_ds_arena_t_));
 
   a->chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE;
-  a->gc_hash_size = GC_HASH_SIZE;  // Toujours une puissance de 2
+  a->gc_hash_size = GC_HASH_SIZE;
   a->gc_buckets = (_ds_allocation_track_t_ **)calloc(a->gc_hash_size, sizeof(_ds_allocation_track_t_ *));
   if (!a->gc_buckets) {
     fputs("ds: out of memory\n", stderr);
@@ -99,16 +99,13 @@ static void *ds_arena_alloc_base(_ds_arena_t_ *a, size_t size) {
 }
 
 void *ds_arena_alloc_internal(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_base(a, size); }
-
 void *ds_arena_alloc_raw(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_base(a, size); }
 
-void *ds_arena_alloc_untracked(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_base(a, size); }
-
-void *ds_arena_alloc(_ds_arena_t_ *a, size_t size) {
+void *ds_arena_alloc(_ds_arena_t_ *a, size_t size, ds_type_descriptor_t *desc) {
   if (size < ARENA_ALIGN) size = ARENA_ALIGN;
   size = ds_arena_align_up(size);
   void *ptr = ds_arena_alloc_base(a, size);
-  ds_gc_register_allocation(a, ptr, size);
+  ds_gc_register_allocation(a, ptr, size, desc);
   return ptr;
 }
 
@@ -167,10 +164,7 @@ void ds_arena_destroy(_ds_arena_t_ *a) {
     free(a->gc_buckets);
   }
 
-  if (a->gc_mark_stack) {
-    free(a->gc_mark_stack);
-  }
-
+  if (a->gc_mark_stack) free(a->gc_mark_stack);
   a->gc_roots = NULL;
   a->free_list_head = NULL;
 

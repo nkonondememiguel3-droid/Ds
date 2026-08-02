@@ -28,8 +28,9 @@ void bench_arena_and_gc(size_t iterations) {
   double start = get_time_ms();
 
   for (size_t i = 0; i < iterations; i++) {
-    ds_arena_alloc(arena, 16);
-    ds_arena_alloc(arena, 32);
+    // --- CORRECTIF : Passage de NULL pour les allocations d'octets purs sans enfants ---
+    ds_arena_alloc(arena, 16, NULL);
+    ds_arena_alloc(arena, 32, NULL);
 
     if (i % 5000 == 0) {
       ds_arena_run_gc(arena);
@@ -108,7 +109,7 @@ void bench_hash_map(size_t elements) {
 
   double start = get_time_ms();
 
-  char key_buffer[32];
+  char key_buffer[32];  // Allocation stable sécurisée
   for (size_t i = 0; i < elements; i++) {
     snprintf(key_buffer, sizeof(key_buffer), "key-id-%zu", i);
     ds_string_t *k = ds_str_new(arena, key_buffer);

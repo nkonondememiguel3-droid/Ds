@@ -14,8 +14,7 @@ static inline size_t ds_ptr_hash(void *ptr, size_t hash_size) {
 }
 
 void ds_gc_push_mark_stack_context(_ds_arena_t_ *a, ds_node_t node) {
-  // --- CORRECTIF CORRESPONDANCE DES TYPES SÉMANTIQUES DU TYPE-SYSTEM ACTUALISÉ ---
-  NodeType type = ds_get_type(node);
+  ds_type_t type = ds_get_type(node);
   if (type != TYPE_NODE && type != TYPE_STRING) return;
   void *ptr = ds_get_ptr(node);
   if (!ptr) return;
@@ -59,13 +58,13 @@ static void ds_gc_check_rehash(_ds_arena_t_ *a) {
 }
 
 void ds_gc_register_root(_ds_arena_t_ *a, ds_node_t *var_ptr) {
-  _ds_gc_root_t_ *r = (_ds_gc_root_t_ *)ds_arena_alloc_untracked(a, sizeof(_ds_gc_root_t_));
+  _ds_gc_root_t_ *r = (_ds_gc_root_t_ *)ds_arena_alloc_internal(a, sizeof(_ds_gc_root_t_));
   r->variable_pointer = var_ptr;
   r->next = a->gc_roots;
   a->gc_roots = r;
 }
 
-void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size) {
+void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size, ds_type_descriptor_t *desc) {
   ds_gc_check_rehash(a);
 
   size_t bucket = ds_ptr_hash(ptr, a->gc_hash_size);
@@ -78,6 +77,7 @@ void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size) {
   track->ptr = ptr;
   track->size = size;
   track->marked = 0;
+  track->descriptor = desc;  // --- ENREGISTREMENT DU TYPE DESCRIPTEUR POLYMOPHE ---
 
   track->next = a->gc_buckets[bucket];
   a->gc_buckets[bucket] = track;
@@ -103,10 +103,6 @@ void ds_gc_unregister_allocation(_ds_arena_t_ *a, void *ptr) {
     }
     curr = &track->next;
   }
-}
-
-void ds_gc_set_mark_extension(_ds_arena_t_ *a, ds_gc_mark_extension_func func) {
-  if (a) a->gc_custom_mark_callback = func;
 }
 
 void ds_arena_run_gc(_ds_arena_t_ *a) {
@@ -149,8 +145,8 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
 
     if (already_marked) continue;
 
-    if (ds_get_type(node) == TYPE_NODE && a->gc_custom_mark_callback) {
-      a->gc_custom_mark_callback(node, a);
+    if (track && track->descriptor && track->descriptor->mark) {
+      track->descriptor->mark(node, a);
     }
   }
 

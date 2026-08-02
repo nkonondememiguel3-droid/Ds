@@ -13,8 +13,8 @@ typedef struct {
   ds_node_t label;
 } ElementNode;
 
-// Extension de marquage itérative non récursive pour le graphe cyclique
-void custom_container_mark_extension(ds_node_t node, _ds_arena_t_ *a) {
+// --- DÉCLARATION DU TYPE DESCRIPTEUR POUR NOTRE CONTAINER ---
+void custom_container_mark(ds_node_t node, _ds_arena_t_ *a) {
   void *ptr = ds_get_ptr(node);
   if (!ptr) return;
 
@@ -26,6 +26,8 @@ void custom_container_mark_extension(ds_node_t node, _ds_arena_t_ *a) {
     ds_gc_push_mark_stack_context(a, n->label);
   }
 }
+
+static ds_type_descriptor_t element_node_descriptor = {.mark = custom_container_mark};
 
 static double get_time_ms(void) {
   struct timespec ts;
@@ -39,35 +41,32 @@ int main() {
   printf("==================================================\n\n");
 
   _ds_arena_t_ *arena = ds_arena_new(0);
-  ds_gc_set_mark_extension(arena, custom_container_mark_extension);
 
   double start = get_time_ms();
 
-  // 1. ALLOCATION D'UN GRAPH CYCLIQUE ET DE SON LIBELLÉ
-  ElementNode *el_a = ARENA_NEW(arena, ElementNode);
-  ElementNode *el_b = ARENA_NEW(arena, ElementNode);
+  // Passage du descripteur de type lors de l'allocation managée
+  ElementNode *el_a = ARENA_NEW(arena, ElementNode, &element_node_descriptor);
+  ElementNode *el_b = ARENA_NEW(arena, ElementNode, &element_node_descriptor);
   void *string_payload = ds_arena_alloc_raw(arena, 64);
 
   el_a->child = ds_tag_ptr(el_b, TYPE_NODE);
   el_a->label = ds_tag_ptr(string_payload, TYPE_STRING);
-  el_b->child = ds_tag_ptr(el_a, TYPE_NODE);  // Cycle de référence fermé (A -> B -> A)
+  el_b->child = ds_tag_ptr(el_a, TYPE_NODE);
 
-  // Enregistrement de la racine via l'API historique stabilisée
   ds_node_t root = ds_tag_ptr(el_a, TYPE_NODE);
   ds_gc_register_root(arena, &root);
 
-  // Génération de 5000 structures éphémères orphelines pour stresser le Sweep
   for (int i = 0; i < 5000; i++) {
-    ARENA_NEW(arena, ElementNode);
+    ARENA_NEW(arena, ElementNode, &element_node_descriptor);
   }
 
   printf("--- PREMIER PASSAGE : Le cycle est référencé par la Racine ---\n");
   ds_arena_run_gc(arena);
-  ds_arena_print_stats(arena);  // el_a, el_b et la String survivent fidèlement au traçage
+  ds_arena_print_stats(arena);
 
-  printf("--- SECOND PASSAGE : Rupture de la Racine (Rupture du lien) ---\n");
-  root = (ds_node_t)0;     // Déconnexion
-  ds_arena_run_gc(arena);  // Le cycle et la String deviennent orphelins et sont balayés
+  printf("--- SECOND PASSAGE : Rupture de la Racine ---\n");
+  root = (ds_node_t)0;
+  ds_arena_run_gc(arena);
   ds_arena_print_stats(arena);
 
   double end = get_time_ms();
