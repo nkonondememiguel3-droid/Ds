@@ -4,157 +4,212 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "common.h"
 #include "gc.h"
 
 inline size_t ds_arena_align_up(size_t n) { return (n + (ARENA_ALIGN - 1)) & ~(size_t)(ARENA_ALIGN - 1); }
 
-static inline void *_a_default_alloc(size_t bytes, void *context) {
-  (void)context;
-  return malloc(bytes);
-}
+_ds_arena_t_ *ds_arena_new(size_t chunk_size) {
+  _ds_arena_t_ *a = (_ds_arena_t_ *)malloc(sizeof(_ds_arena_t_));
+  if (!a) {
+    fputs("ds: out of memory for arena shell\n", stderr);
+    abort();
+  }
+  memset(a, 0, sizeof(_ds_arena_t_));
 
-static inline void *_a_default_realloc(void *ptr, size_t new_size, void *context) {
-  (void)context;
-  return realloc(ptr, new_size);
-}
-
-static inline void _a_default_free(void *ptr, void *context) {
-  (void)context;
-  free(ptr);
-}
-
-inline _ds_arena_t_ ds_arena_new(size_t chunk_size) {
-  _ds_arena_t_ arena = (_ds_arena_t_){.head = NULL,
-                                      .free_list_head = NULL,
-                                      .chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE,
-                                      .allocs_from_bump = 0,
-                                      .allocs_from_free_list = 0};
-
-  arena.imemory.alloc = _a_default_alloc;
-  arena.imemory.realloc = _a_default_realloc;
-  arena.imemory.free = _a_default_free;
-
-  return arena;
+  a->chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE;
+  a->gc_hash_size = GC_HASH_SIZE;
+  a->gc_buckets = (_ds_allocation_track_t_ **)calloc(a->gc_hash_size, sizeof(_ds_allocation_track_t_ *));
+  if (!a->gc_buckets) {
+    fputs("ds: out of memory\n", stderr);
+    abort();
+  }
+  return a;
 }
 
 static inline _ds_arena_chunk_t_ *ds_arena_grow(_ds_arena_t_ *a, size_t needed) {
   size_t sz = (a->chunk_size > needed) ? a->chunk_size : needed;
   sz = ds_arena_align_up(sz);
-  _ds_arena_chunk_t_ *c = (_ds_arena_chunk_t_ *)a->imemory.alloc(sizeof(_ds_arena_chunk_t_) + sz, NULL);
+  _ds_arena_chunk_t_ *c = (_ds_arena_chunk_t_ *)malloc(sizeof(_ds_arena_chunk_t_) + sz);
   if (!c) {
-    fputs("ds: out of memory in arena_grow\n", stderr);
+    fputs("ds: out of memory\n", stderr);
     abort();
   }
+
   c->chunk_size = sz;
   c->chunk_size_used = 0;
+  c->free_list_head = NULL;
   c->next_arena_chunk = a->head;
   a->head = c;
+
+  a->current_chunks++;
+  if (a->current_chunks > a->peak_chunks) a->peak_chunks = a->current_chunks;
   return c;
 }
 
-inline void *ds_arena_alloc(_ds_arena_t_ *a, size_t size) {
+static void *ds_arena_alloc_base(_ds_arena_t_ *a, size_t size) {
+  if (size < ARENA_ALIGN) size = ARENA_ALIGN;
   size = ds_arena_align_up(size);
-  void *ptr = NULL;
 
-  // 1. TENTATIVE DE RÉUTILISATION VIA LA FREE-LIST EXTERNE INDÉSTRUCTIBLE
-  if (a->free_list_head != NULL) {
-    _ds_free_block_t_ *node = a->free_list_head;
+  _ds_arena_chunk_t_ *c = a->head;
+  while (c) {
+    _ds_free_block_t_ *curr = c->free_list_head;
+    _ds_free_block_t_ *prev = NULL;
 
-    // On récupère l'adresse physique préservée
-    ptr = node->address;
-
-    // On avance la tête vers le bloc libre suivant
-    a->free_list_head = node->next;
-
-    // On libère le petit maillon de contrôle externe
-    free(node);
-
-    // Nettoyage complet sécurisé du bloc réutilisé
-    memset(ptr, 0, size);
-    a->allocs_from_free_list++;
+    while (curr) {
+      if (curr->size >= size) {
+        void *ptr = (void *)curr;
+        if (curr->size >= size + sizeof(_ds_free_block_t_)) {
+          _ds_free_block_t_ *remainder = (_ds_free_block_t_ *)((char *)ptr + size);
+          remainder->size = curr->size - size;
+          remainder->next = curr->next;
+          if (prev)
+            prev->next = remainder;
+          else
+            c->free_list_head = remainder;
+        } else {
+          size = curr->size;
+          if (prev)
+            prev->next = curr->next;
+          else
+            c->free_list_head = curr->next;
+        }
+        a->total_free_bytes_in_list -= size;
+        memset(ptr, 0, size);
+        a->allocs_from_free_list++;
+        return ptr;
+      }
+      prev = curr;
+      curr = curr->next;
+    }
+    c = c->next_arena_chunk;
   }
-  // 2. FALLBACK SUR LE BUMP POINTER
-  else {
-    _ds_arena_chunk_t_ *c = a->head;
-    if (!c || c->chunk_size_used + size > c->chunk_size) c = ds_arena_grow(a, size);
-    ptr = (void *)((char *)(c + 1) + c->chunk_size_used);
-    c->chunk_size_used += size;
-    memset(ptr, 0, size);
 
-    a->allocs_from_bump++;
-  }
-
-  ds_gc_register_allocation(ptr);
+  _ds_arena_chunk_t_ *chunk = a->head;
+  if (!chunk || chunk->chunk_size_used + size > chunk->chunk_size) chunk = ds_arena_grow(a, size);
+  void *ptr = (void *)((char *)(chunk + 1) + chunk->chunk_size_used);
+  chunk->chunk_size_used += size;
+  memset(ptr, 0, size);
+  a->allocs_from_bump++;
   return ptr;
 }
 
-void ds_arena_recycle(_ds_arena_t_ *a, void *dead_ptr) {
-  if (!dead_ptr) return;
+void *ds_arena_alloc_internal(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_base(a, size); }
+void *ds_arena_alloc_raw(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_base(a, size); }
 
-  ds_gc_unregister_allocation(dead_ptr);
-
-  _ds_free_block_t_ *node = (_ds_free_block_t_ *)malloc(sizeof(_ds_free_block_t_));
-  node->address = dead_ptr;
-
-  node->next = a->free_list_head;
-  a->free_list_head = node;
+void *ds_arena_alloc(_ds_arena_t_ *a, size_t size, const ds_type_descriptor_t *desc) {
+  if (size < ARENA_ALIGN) size = ARENA_ALIGN;
+  size = ds_arena_align_up(size);
+  void *ptr = ds_arena_alloc_base(a, size);
+  ds_gc_register_allocation(a, ptr, size, desc);
+  return ptr;
 }
 
-inline void ds_arena_destroy(_ds_arena_t_ *a) {
+// --- FUSION ET RECYCLAGE LOCAL EN O(1) SANS REBOUCLAGE ---
+void ds_arena_recycle_raw(_ds_arena_t_ *a, void *dead_ptr, size_t size) {
+  if (!dead_ptr) return;
+  size = ds_arena_align_up(size);
+
+  _ds_arena_chunk_t_ *c = a->head;
+  while (c) {
+    char *chunk_start = (char *)(c + 1);
+    char *chunk_end = chunk_start + c->chunk_size;
+
+    if ((char *)dead_ptr >= chunk_start && (char *)dead_ptr < chunk_end) {
+      _ds_free_block_t_ *new_free = (_ds_free_block_t_ *)dead_ptr;
+      new_free->size = size;
+
+      // Insertion immédiate en tête de liste locale : O(1) constant garanti
+      new_free->next = c->free_list_head;
+      c->free_list_head = new_free;
+
+      a->total_free_bytes_in_list += size;
+
+      // --- COALESCING LOCAL DIRECT EN O(1) ---
+      // Si le bloc qui vient d'être inséré touche le bloc qui le suit directement dans la liste,
+      // on fusionne les deux pour réparer instantanément la fragmentation.
+      if (new_free->next && (char *)new_free + new_free->size == (char *)new_free->next) {
+        new_free->size += new_free->next->size;
+        new_free->next = new_free->next->next;
+      }
+      return;
+    }
+    c = c->next_arena_chunk;
+  }
+}
+
+void ds_arena_recycle(_ds_arena_t_ *a, void *dead_ptr, size_t size) {
+  if (!dead_ptr) return;
+  ds_gc_unregister_allocation(a, dead_ptr);
+  ds_arena_recycle_raw(a, dead_ptr, size);
+}
+
+void ds_arena_destroy(_ds_arena_t_ *a) {
+  if (!a) return;
+  if (a->gc_buckets) {
+    for (size_t i = 0; i < a->gc_hash_size; i++) {
+      _ds_allocation_track_t_ *curr_alloc = a->gc_buckets[i];
+      while (curr_alloc) {
+        _ds_allocation_track_t_ *tmp = curr_alloc->next;
+        free(curr_alloc);
+        curr_alloc = tmp;
+      }
+    }
+    free(a->gc_buckets);
+  }
+  if (a->gc_mark_stack) free(a->gc_mark_stack);
+  a->gc_roots = NULL;
+
   _ds_arena_chunk_t_ *c = a->head;
   while (c) {
     _ds_arena_chunk_t_ *next = c->next_arena_chunk;
-    a->imemory.free(c, NULL);
+    free(c);
     c = next;
   }
-
-  _ds_free_block_t_ *free_node = a->free_list_head;
-  while (free_node) {
-    _ds_free_block_t_ *tmp = free_node->next;
-    free(free_node);
-    free_node = tmp;
-  }
-
-  a->head = NULL;
-  a->free_list_head = NULL;
-}
-
-inline _ds_arena_checkpoint_t_ ds_arena_checkpoint(_ds_arena_t_ *a) {
-  return (_ds_arena_checkpoint_t_){.checkpoint_head = a->head,
-                                   .checkpoint_size_used = a->head ? a->head->chunk_size_used : 0};
-}
-
-inline void ds_arena_reset_to(_ds_arena_t_ *a, _ds_arena_checkpoint_t_ cp) {
-  while (a->head && a->head != cp.checkpoint_head) {
-    _ds_arena_chunk_t_ *dead = a->head;
-    a->head = dead->next_arena_chunk;
-    a->imemory.free(dead, NULL);
-  }
-  if (a->head) a->head->chunk_size_used = cp.checkpoint_size_used;
-  a->free_list_head = NULL;
-}
-
-_ds_arena_t_ ds_arena_new_with_allocator(size_t chunk_size, ds_mem_alloc_func m_alloc, ds_mem_realloc_func m_realloc,
-                                         ds_mem_free_func m_free, void *context) {
-  _ds_arena_t_ arena = (_ds_arena_t_){
-      .head = NULL, .free_list_head = NULL, .chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE};
-  arena.imemory.alloc = m_alloc;
-  arena.imemory.realloc = m_realloc;
-  arena.imemory.free = m_free;
-  return arena;
+  free(a);
 }
 
 void ds_arena_print_stats(const _ds_arena_t_ *a) {
   if (!a) return;
-  size_t total = a->allocs_from_bump + a->allocs_from_free_list;
-  float ratio = total ? ((float)a->allocs_from_free_list / (float)total) * 100.0f : 0.0f;
+  size_t total_demands = a->allocs_from_bump + a->allocs_from_free_list;
+  size_t total_arena_bytes = 0;
+  _ds_arena_chunk_t_ *c = a->head;
+  while (c) {
+    total_arena_bytes += c->chunk_size;
+    c = c->next_arena_chunk;
+  }
+
+  size_t largest_free_block = 0;
+  c = a->head;
+  while (c) {
+    _ds_free_block_t_ *fb = c->free_list_head;
+    while (fb) {
+      if (fb->size > largest_free_block) largest_free_block = fb->size;
+      fb = fb->next;
+    }
+    c = c->next_arena_chunk;
+  }
+
+  float frag_ratio = a->total_free_bytes_in_list
+                         ? (1.0f - ((float)largest_free_block / (float)a->total_free_bytes_in_list)) * 100.0f
+                         : 0.0f;
 
   printf("\n==================================================\n");
-  printf("         RAPPORT DE TÉLÉMÉTRIE DE L'ARÈNE         \n");
+  printf("     RAPPORT DE TÉLÉMÉTRIE INDUSTRIALISÉ          \n");
   printf("==================================================\n");
   printf("Allocations neuves (Bump Pointer)   : %zu\n", a->allocs_from_bump);
-  printf("Allocations recyclées (Free-List)   : %zu\n", a->allocs_from_free_list);
-  printf("Total des demandes de mémoire       : %zu\n", total);
-  printf("Taux d'efficacité du recyclage GC   : %.2f%%\n", ratio);
+  printf("Allocations issues de Free-List     : %zu\n", a->allocs_from_free_list);
+  printf("Total des demandes de mémoire       : %zu\n", total_demands);
+  printf("--------------------------------------------------\n");
+  printf("Chunks actifs au système (Current)  : %zu\n", a->current_chunks);
+  printf("Pic Historique de Chunks (Peak)     : %zu\n", a->peak_chunks);
+  printf("Volume Mémoire total géré (Bytes)   : %zu\n", total_arena_bytes);
+  printf("Mémoire Libre dans la Free-List     : %zu bytes\n", a->total_free_bytes_in_list);
+  printf("Plus grand bloc disponible libre    : %zu bytes\n", largest_free_block);
+  printf("--------------------------------------------------\n");
+  printf("Allocations GC vivantes             : %zu\n", a->gc_live_allocations);
+  printf("Octets GC vivants                   : %zu bytes\n", a->gc_live_bytes);
+  printf("Pic Historique d'octets GC vivants   : %zu bytes\n", a->gc_peak_live_bytes);
+  printf("Ratio Réel de Fragmentation Externe : %.2f%%\n", frag_ratio);
   printf("==================================================\n\n");
 }

@@ -2,55 +2,98 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
+#include "common.h"
 #include "ds_arena.h"
 
-// Structures de données internes du Garbage Collector
-typedef struct _ds_gc_root_ {
-  ds_node_t *variable_pointer;
-  struct _ds_gc_root_ *next;
-} _ds_gc_root_t_;
-
-typedef struct _ds_allocation_track_ {
-  void *ptr;
-  int marked;
-  struct _ds_allocation_track_ *next;
-} _ds_allocation_track_t_;
-
-// Variables statiques de suivi de l'état du GC
-static _ds_gc_root_t_ *gc_roots = NULL;
-static _ds_allocation_track_t_ *gc_allocs = NULL;
-static ds_gc_mark_extension_func gc_custom_mark_callback = NULL;
-
-// Configure l'extension de parcours externe pour les structures complexes (ex: graphes)
-void ds_gc_set_mark_extension(ds_gc_mark_extension_func func) { gc_custom_mark_callback = func; }
-
-// Enregistre une variable racine à protéger du balayage
-void ds_gc_register_root(_ds_arena_t_ *a, ds_node_t *var_ptr) {
-  _ds_gc_root_t_ *r = (_ds_gc_root_t_ *)ds_arena_alloc(a, sizeof(_ds_gc_root_t_));
-  r->variable_pointer = var_ptr;
-  r->next = gc_roots;
-  gc_roots = r;
+static inline size_t ds_ptr_hash(void *ptr, size_t hash_size) {
+  uintptr_t x = (uintptr_t)ptr;
+  x ^= x >> 33;
+  x *= 0xff51afd7ed558ccdULL;
+  x ^= x >> 33;
+  return (size_t)(x & (hash_size - 1));
 }
 
-// Enregistre une allocation brute de l'arène pour suivi GC
-void ds_gc_register_allocation(void *ptr) {
-  _ds_allocation_track_t_ *track = malloc(sizeof(_ds_allocation_track_t_));
-  track->ptr = ptr;
-  track->marked = 0;
-  track->next = gc_allocs;
-  gc_allocs = track;
-}
-
-// Retire un pointeur du suivi actif lors d'un recyclage explicite (ex: pop/remove)
-void ds_gc_unregister_allocation(void *ptr) {
+void ds_gc_push_mark_stack_context(_ds_arena_t_ *a, ds_node_t node) {
+  ds_type_t type = ds_get_type(node);
+  if (type != TYPE_NODE && type != TYPE_STRING) return;
+  void *ptr = ds_get_ptr(node);
   if (!ptr) return;
-  _ds_allocation_track_t_ **curr = &gc_allocs;
+
+  if (a->gc_mark_stack_top >= a->gc_mark_stack_cap) {
+    size_t new_cap = a->gc_mark_stack_cap ? a->gc_mark_stack_cap * 2 : 1024;
+    ds_node_t *new_stack = realloc(a->gc_mark_stack, sizeof(ds_node_t) * new_cap);
+    if (!new_stack) {
+      fputs("ds: out of memory\n", stderr);
+      abort();
+    }
+    a->gc_mark_stack = new_stack;
+    a->gc_mark_stack_cap = new_cap;
+  }
+  a->gc_mark_stack[a->gc_mark_stack_top++] = node;
+}
+
+static void ds_gc_check_rehash(_ds_arena_t_ *a) {
+  if ((float)a->gc_live_allocations / (float)a->gc_hash_size > 0.75f) {
+    size_t old_size = a->gc_hash_size;
+    size_t new_size = old_size * 2;
+    _ds_allocation_track_t_ **new_buckets = calloc(new_size, sizeof(_ds_allocation_track_t_ *));
+    if (!new_buckets) return;
+
+    for (size_t i = 0; i < old_size; i++) {
+      _ds_allocation_track_t_ *curr = a->gc_buckets[i];
+      while (curr) {
+        _ds_allocation_track_t_ *next_node = curr->next;
+        size_t new_bucket = ds_ptr_hash(curr->ptr, new_size);
+        curr->next = new_buckets[new_bucket];
+        new_buckets[new_bucket] = curr;
+        curr = next_node;
+      }
+    }
+    free(a->gc_buckets);
+    a->gc_buckets = new_buckets;
+    a->gc_hash_size = new_size;
+  }
+}
+
+void ds_gc_register_root(_ds_arena_t_ *a, ds_node_t *var_ptr) {
+  _ds_gc_root_t_ *r = (_ds_gc_root_t_ *)ds_arena_alloc_internal(a, sizeof(_ds_gc_root_t_));
+  r->variable_pointer = var_ptr;
+  r->next = a->gc_roots;
+  a->gc_roots = r;
+}
+
+void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size, const ds_type_descriptor_t *desc) {
+  ds_gc_check_rehash(a);
+  size_t bucket = ds_ptr_hash(ptr, a->gc_hash_size);
+  _ds_allocation_track_t_ *track = malloc(sizeof(_ds_allocation_track_t_));
+  if (!track) {
+    fputs("ds: out of memory\n", stderr);
+    abort();
+  }
+
+  track->ptr = ptr;
+  track->size = size;
+  track->marked = 0;
+  track->descriptor = desc;
+
+  track->next = a->gc_buckets[bucket];
+  a->gc_buckets[bucket] = track;
+  a->gc_live_allocations++;
+  a->gc_live_bytes += size;
+  if (a->gc_live_bytes > a->gc_peak_live_bytes) a->gc_peak_live_bytes = a->gc_live_bytes;
+}
+
+void ds_gc_unregister_allocation(_ds_arena_t_ *a, void *ptr) {
+  if (!a || !ptr || !a->gc_buckets) return;
+  size_t bucket = ds_ptr_hash(ptr, a->gc_hash_size);
+  _ds_allocation_track_t_ **curr = &a->gc_buckets[bucket];
   while (*curr) {
     _ds_allocation_track_t_ *track = *curr;
     if (track->ptr == ptr) {
       *curr = track->next;
+      a->gc_live_allocations--;
+      a->gc_live_bytes -= track->size;
       free(track);
       return;
     }
@@ -58,71 +101,85 @@ void ds_gc_unregister_allocation(void *ptr) {
   }
 }
 
-// Phase Mark générique avec mécanisme de rupture de cycle infini
-void gc_mark_node(ds_node_t node) {
-  if (ds_get_type(node) != TYPE_NODE) return;
-  void *ptr = ds_get_ptr(node);
-  if (!ptr) return;
-
-  _ds_allocation_track_t_ *curr = gc_allocs;
-  while (curr) {
-    if (curr->ptr == ptr) {
-      if (curr->marked) return;  // Déjà marqué vivant, casse les boucles cycliques
-      curr->marked = 1;
-      break;
-    }
-    curr = curr->next;
-  }
-
-  // Délégation du marquage des structures internes si le callback est configuré
-  if (gc_custom_mark_callback) {
-    gc_custom_mark_callback(node);
-  }
-}
-
-// Phase Sweep : Identifie les blocs morts et les renvoie à la Free-List externe de l'arène
 void ds_arena_run_gc(_ds_arena_t_ *a) {
-  _ds_gc_root_t_ *root = gc_roots;
+  printf("GC roots:\n");
+
+  _ds_gc_root_t_ *r = a->gc_roots;
+  while (r) {
+    printf(" root=%p value=%p\n", (void *)r, ds_get_ptr(*r->variable_pointer));
+    r = r->next;
+  }
+
+  if (!a) return;
+
+  a->gc_mark_stack_top = 0;
+  if (!a->gc_mark_stack) {
+    a->gc_mark_stack_cap = 1024;
+    a->gc_mark_stack = malloc(sizeof(ds_node_t) * a->gc_mark_stack_cap);
+    if (!a->gc_mark_stack) {
+      fputs("ds: out of memory\n", stderr);
+      abort();
+    }
+  }
+
+  // 1. Amorçage de la pile itérative avec les racines
+  _ds_gc_root_t_ *root = a->gc_roots;
   while (root) {
     if (root->variable_pointer) {
-      gc_mark_node(*(root->variable_pointer));
+      ds_gc_push_mark_stack_context(a, *(root->variable_pointer));
     }
     root = root->next;
   }
 
-  _ds_allocation_track_t_ **curr = &gc_allocs;
-  int recycled_count = 0;
+  // 2. Phase de marquage polymorphe directe (Sans décalage artificiel)
+  while (a->gc_mark_stack_top > 0) {
+    ds_node_t node = a->gc_mark_stack[--a->gc_mark_stack_top];
+    void *ptr = ds_get_ptr(node);
+    if (!ptr) continue;
 
-  while (*curr) {
-    _ds_allocation_track_t_ *track = *curr;
-    if (!track->marked) {
-      // Sauvegarde de l'élément suivant avant la destruction du maillon par ds_arena_recycle
-      _ds_allocation_track_t_ *next_track = track->next;
+    size_t bucket = ds_ptr_hash(ptr, a->gc_hash_size);
+    _ds_allocation_track_t_ *track = a->gc_buckets[bucket];
 
-      ds_arena_recycle(a, track->ptr);
+    bool already_marked = false;
+    while (track) {
+      if (track->ptr == ptr) {
+        if (track->marked) already_marked = true;
+        track->marked = 1;
+        break;
+      }
+      track = track->next;
+    }
+    if (already_marked) continue;
 
-      *curr = next_track;
-      recycled_count++;
-    } else {
-      track->marked = 0;  // Reset du drapeau pour le prochain cycle
-      curr = &track->next;
+    // Déclenchement du callback d'extension du descripteur de l'objet
+    if (track && track->descriptor && track->descriptor->mark) {
+      track->descriptor->mark(node, a);
     }
   }
 
-  if (recycled_count > 0) {
-    printf("[GC Externe] Nettoyage : %d bloc(s) de maillons recyclé(s) dans l'arène.\n", recycled_count);
-  }
-}
+  // 3. Phase de balayage unifiée (Sweep)
+  for (size_t i = 0; i < a->gc_hash_size; i++) {
+    _ds_allocation_track_t_ **curr = &a->gc_buckets[i];
+    while (*curr) {
+      _ds_allocation_track_t_ *track = *curr;
+      if (!track->marked) {
+        _ds_allocation_track_t_ *next_track = track->next;
 
-// Nettoie l'intégralité des structures de contrôle du tas à la fermeture du programme
-void ds_gc_destroy(void) {
-  _ds_allocation_track_t_ *curr_alloc = gc_allocs;
-  while (curr_alloc) {
-    _ds_allocation_track_t_ *tmp = curr_alloc->next;
-    free(curr_alloc);
-    curr_alloc = tmp;
+        // Appel automatique du finaliseur pour purger les tampons internes raw
+        if (track->descriptor && track->descriptor->finalize) {
+          track->descriptor->finalize(track->ptr, a);
+        }
+
+        ds_arena_recycle_raw(a, track->ptr, track->size);
+        a->gc_live_allocations--;
+        a->gc_live_bytes -= track->size;
+
+        *curr = next_track;
+        free(track);
+      } else {
+        track->marked = 0;
+        curr = &track->next;
+      }
+    }
   }
-  gc_allocs = NULL;
-  gc_roots = NULL;
-  gc_custom_mark_callback = NULL;
 }

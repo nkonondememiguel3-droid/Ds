@@ -1,49 +1,37 @@
 #ifndef ds_dynamic_array_h
 #define ds_dynamic_array_h
 
-#include <assert.h>
-#include <stdio.h>
+#include <stdbool.h>
+#include <stddef.h>
 
 #include "common.h"
 
-// En-tête aligné sur 16 octets pour correspondre parfaitement aux blocs de l'arène
-typedef struct ALIGN16 {
+#define DS_ARRAY_HEADER_MANAGED 0x01
+#define DS_ARRAY_ELEMENTS_ARE_GC 0x02
+
+typedef struct {
   size_t size_used;
-  size_t size;
-} ALIGN16_POST _ds_dyn_array_t_;
+  size_t capacity;
+  size_t element_size;
+  uint8_t flags;
+  void *data;
+} ds_array_t;
 
-extern void *ds_da_grow(_ds_arena_t_ *a, void *arr, size_t element_size, size_t new_cap);
+extern const ds_type_descriptor_t ds_da_descriptor;
 
-#define ds_da_hdr(arr) ((_ds_dyn_array_t_ *)(arr) - 1)
-#define ds_da_len(arr) ((arr) ? ds_da_hdr(arr)->size_used : (size_t)0)
-#define ds_da_cap(arr) ((arr) ? ds_da_hdr(arr)->size : (size_t)0)
+extern ds_array_t *ds_array_new(_ds_arena_t_ *a, size_t element_size, size_t initial_cap, uint8_t flags);
+extern void ds_array_reserve(_ds_arena_t_ *a, ds_array_t *arr, size_t min_cap);
+extern void ds_array_push(_ds_arena_t_ *a, ds_array_t *arr, const void *element_ptr);
 
-#define ds_da_reserve(a, arr, min_cap)                      \
-  do {                                                      \
-    size_t _mc = (size_t)(min_cap);                         \
-                                                            \
-    if (ds_da_cap(arr) < _mc) {                             \
-      size_t _nc = ds_da_cap(arr) ? ds_da_cap(arr) * 2 : 8; \
-      if (_nc < _mc) _nc = _mc;                             \
-                                                            \
-      (arr) = ds_da_grow((a), (arr), sizeof(*(arr)), _nc);  \
-    }                                                       \
-  } while (0)
+static inline void ds_array_push_node(_ds_arena_t_ *a, ds_array_t *arr, ds_node_t node) {
+  if (arr->size_used >= arr->capacity) ds_array_reserve(a, arr, arr->size_used + 1);
+  ((ds_node_t *)arr->data)[arr->size_used++] = node;
+}
 
-#define ds_da_push(a, arr, val)                    \
-  do {                                             \
-    ds_da_reserve((a), (arr), ds_da_len(arr) + 1); \
-    (arr)[ds_da_hdr(arr)->size_used++] = (val);    \
-  } while (0)
+extern void *ds_array_get(const ds_array_t *arr, size_t index);
+extern void ds_array_free_raw(_ds_arena_t_ *a, ds_array_t *arr);
 
-#define ds_da_pop(arr) (assert(ds_da_len(arr) > 0), (arr)[--ds_da_hdr(arr)->size_used])
+#define ds_array_len(arr) ((arr) ? (arr)->size_used : 0)
+#define ds_array_cap(arr) ((arr) ? (arr)->capacity : 0)
 
-#define ds_da_clear(arr)                    \
-  do {                                      \
-    if (arr) ds_da_hdr(arr)->size_used = 0; \
-  } while (0)
-
-#define ds_da_last(arr) ((arr)[ds_da_len(arr) - 1])
-#define ds_da_at(arr, i) ((arr)[(i)])
-
-#endif  // ds_dynamic_array_h
+#endif

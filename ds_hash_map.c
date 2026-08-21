@@ -59,7 +59,7 @@ bool ds_map_remove(_ds_arena_t_ *a, ds_hash_map_t *map, const ds_string_t *key) 
         map->buckets[index] = curr->next;
       }
 
-      ds_arena_recycle(a, curr);
+      ds_arena_recycle(a, curr, sizeof(_ds_hash_entry_t_));
       map->size--;
       return true;
     }

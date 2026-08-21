@@ -8,6 +8,8 @@ add_library(
     include/gc.h
 )
 
+target_compile_options(ds_arena PRIVATE -march=native)
+
 target_include_directories(ds_arena PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

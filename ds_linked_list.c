@@ -70,7 +70,7 @@ bool ds_list_remove(_ds_arena_t_ *a, ds_list_t *list, ds_list_node_t *node) {
     }
   }
 
-  ds_arena_recycle(a, node);
+  ds_arena_recycle(a, node, sizeof(ds_list_node_t));
   list->length--;
   return true;
 }

@@ -1,6 +1,7 @@
 #ifndef ds_graph_h
 #define ds_graph_h
 
+#include <stdalign.h>
 #include "common.h"
 #include "ds_linked_list.h"
 #include "ds_string.h"
@@ -13,9 +14,9 @@ typedef struct _ds_vertex_ {
   struct _ds_vertex_ **neighbors;
 } ds_vertex_t;
 
-typedef struct ALIGN16 {
-  ds_list_t *vertices;
-} ALIGN16_POST ds_graph_t;
+typedef struct {
+  alignas(16) ds_list_t *vertices;
+} ds_graph_t;
 
 extern ds_graph_t *ds_graph_new(_ds_arena_t_ *a);
 extern ds_vertex_t *ds_graph_add_vertex(_ds_arena_t_ *a, ds_graph_t *graph, const char *id, ds_node_t value);
