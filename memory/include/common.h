@@ -36,7 +36,7 @@ typedef uintptr_t ds_node_t;
 static inline ds_type_t ds_get_type(ds_node_t n) { return (ds_type_t)(n & ARENA_TAG_MASK); }
 static inline void *ds_get_ptr(ds_node_t n) { return (void *)(n & ARENA_PTR_MASK); }
 static inline ds_node_t ds_tag_ptr(void *ptr, ds_type_t type) { return (ds_node_t)ptr | type; }
-static inline ds_node_t ds_make_int(int val) { return ((uintptr_t)val << 4) | TYPE_INT; }
+static inline ds_node_t ds_make_int(int val) { return ((ds_node_t)((intptr_t)val << 4)) | TYPE_INT; }
 static inline int ds_unpack_int(ds_node_t node) { return (int)((intptr_t)node >> 4); }
 
 static inline ds_node_t ds_make_float(float val) {
@@ -45,8 +45,6 @@ static inline ds_node_t ds_make_float(float val) {
   return ((uintptr_t)bits << 4) | TYPE_FLOAT;
 }
 
-static inline ds_node_t ds_make_float_from_bits(uint32_t bits) { return ((uintptr_t)bits << 4) | TYPE_FLOAT; }
-
 static inline float ds_unpack_float(ds_node_t node) {
   uint32_t bits = (uint32_t)(node >> 4);
   float f;
@@ -54,7 +52,7 @@ static inline float ds_unpack_float(ds_node_t node) {
   return f;
 }
 
-// Free-List intrusive
+// Maille élémentaire de la Free-List locale
 typedef struct _ds_free_block_ {
   size_t size;
   struct _ds_free_block_ *next;
@@ -65,13 +63,14 @@ typedef struct __ds_arena__ _ds_arena_t_;
 
 typedef struct {
   void (*mark)(ds_node_t node, _ds_arena_t_ *a);
+  void (*finalize)(void *ptr, _ds_arena_t_ *a);
 } ds_type_descriptor_t;
 
 typedef struct _ds_allocation_track_ {
   void *ptr;
   size_t size;
   uint8_t marked;
-  ds_type_descriptor_t *descriptor;
+  const ds_type_descriptor_t *descriptor;
   struct _ds_allocation_track_ *next;
 } _ds_allocation_track_t_;
 
@@ -80,18 +79,18 @@ typedef struct _ds_gc_root_ {
   struct _ds_gc_root_ *next;
 } _ds_gc_root_t_;
 
+// --- ARCHITECTURE RECOMMANDÉE : FREE-LIST LOCALISÉE AU CHUNK ---
 typedef struct _ds_arena_chunk_t_ {
   struct _ds_arena_chunk_t_ *next_arena_chunk;
   size_t chunk_size;
   size_t chunk_size_used;
-  size_t reserved;
+  _ds_free_block_t_ *free_list_head;  // Free-List propre et confinée à ce chunk (Aucune fuite inter-chunk)
+  size_t reserved;                    // Alignement 16 octets du header (32 octets totaux)
 } _ds_arena_chunk_t_;
 
 typedef struct __ds_arena__ {
   _ds_arena_chunk_t_ *head;
   size_t chunk_size;
-
-  _ds_free_block_t_ *free_list_head;
 
   _ds_allocation_track_t_ **gc_buckets;
   size_t gc_hash_size;

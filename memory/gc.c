@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "common.h"
 #include "ds_arena.h"
 
 static inline size_t ds_ptr_hash(void *ptr, size_t hash_size) {
@@ -36,7 +37,6 @@ static void ds_gc_check_rehash(_ds_arena_t_ *a) {
   if ((float)a->gc_live_allocations / (float)a->gc_hash_size > 0.75f) {
     size_t old_size = a->gc_hash_size;
     size_t new_size = old_size * 2;
-
     _ds_allocation_track_t_ **new_buckets = calloc(new_size, sizeof(_ds_allocation_track_t_ *));
     if (!new_buckets) return;
 
@@ -45,7 +45,6 @@ static void ds_gc_check_rehash(_ds_arena_t_ *a) {
       while (curr) {
         _ds_allocation_track_t_ *next_node = curr->next;
         size_t new_bucket = ds_ptr_hash(curr->ptr, new_size);
-
         curr->next = new_buckets[new_bucket];
         new_buckets[new_bucket] = curr;
         curr = next_node;
@@ -64,9 +63,8 @@ void ds_gc_register_root(_ds_arena_t_ *a, ds_node_t *var_ptr) {
   a->gc_roots = r;
 }
 
-void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size, ds_type_descriptor_t *desc) {
+void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size, const ds_type_descriptor_t *desc) {
   ds_gc_check_rehash(a);
-
   size_t bucket = ds_ptr_hash(ptr, a->gc_hash_size);
   _ds_allocation_track_t_ *track = malloc(sizeof(_ds_allocation_track_t_));
   if (!track) {
@@ -77,11 +75,10 @@ void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size, ds_type_
   track->ptr = ptr;
   track->size = size;
   track->marked = 0;
-  track->descriptor = desc;  // --- ENREGISTREMENT DU TYPE DESCRIPTEUR POLYMOPHE ---
+  track->descriptor = desc;
 
   track->next = a->gc_buckets[bucket];
   a->gc_buckets[bucket] = track;
-
   a->gc_live_allocations++;
   a->gc_live_bytes += size;
   if (a->gc_live_bytes > a->gc_peak_live_bytes) a->gc_peak_live_bytes = a->gc_live_bytes;
@@ -90,7 +87,6 @@ void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size, ds_type_
 void ds_gc_unregister_allocation(_ds_arena_t_ *a, void *ptr) {
   if (!a || !ptr || !a->gc_buckets) return;
   size_t bucket = ds_ptr_hash(ptr, a->gc_hash_size);
-
   _ds_allocation_track_t_ **curr = &a->gc_buckets[bucket];
   while (*curr) {
     _ds_allocation_track_t_ *track = *curr;
@@ -106,6 +102,14 @@ void ds_gc_unregister_allocation(_ds_arena_t_ *a, void *ptr) {
 }
 
 void ds_arena_run_gc(_ds_arena_t_ *a) {
+  printf("GC roots:\n");
+
+  _ds_gc_root_t_ *r = a->gc_roots;
+  while (r) {
+    printf(" root=%p value=%p\n", (void *)r, ds_get_ptr(*r->variable_pointer));
+    r = r->next;
+  }
+
   if (!a) return;
 
   a->gc_mark_stack_top = 0;
@@ -118,6 +122,7 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
     }
   }
 
+  // 1. Amorçage de la pile itérative avec les racines
   _ds_gc_root_t_ *root = a->gc_roots;
   while (root) {
     if (root->variable_pointer) {
@@ -126,14 +131,16 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
     root = root->next;
   }
 
+  // 2. Phase de marquage polymorphe directe (Sans décalage artificiel)
   while (a->gc_mark_stack_top > 0) {
     ds_node_t node = a->gc_mark_stack[--a->gc_mark_stack_top];
     void *ptr = ds_get_ptr(node);
+    if (!ptr) continue;
 
     size_t bucket = ds_ptr_hash(ptr, a->gc_hash_size);
     _ds_allocation_track_t_ *track = a->gc_buckets[bucket];
-    bool already_marked = false;
 
+    bool already_marked = false;
     while (track) {
       if (track->ptr == ptr) {
         if (track->marked) already_marked = true;
@@ -142,15 +149,15 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
       }
       track = track->next;
     }
-
     if (already_marked) continue;
 
+    // Déclenchement du callback d'extension du descripteur de l'objet
     if (track && track->descriptor && track->descriptor->mark) {
       track->descriptor->mark(node, a);
     }
   }
 
-  int recycled_count = 0;
+  // 3. Phase de balayage unifiée (Sweep)
   for (size_t i = 0; i < a->gc_hash_size; i++) {
     _ds_allocation_track_t_ **curr = &a->gc_buckets[i];
     while (*curr) {
@@ -158,22 +165,21 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
       if (!track->marked) {
         _ds_allocation_track_t_ *next_track = track->next;
 
-        ds_arena_recycle_raw(a, track->ptr, track->size);
+        // Appel automatique du finaliseur pour purger les tampons internes raw
+        if (track->descriptor && track->descriptor->finalize) {
+          track->descriptor->finalize(track->ptr, a);
+        }
 
+        ds_arena_recycle_raw(a, track->ptr, track->size);
         a->gc_live_allocations--;
         a->gc_live_bytes -= track->size;
 
         *curr = next_track;
         free(track);
-        recycled_count++;
       } else {
         track->marked = 0;
         curr = &track->next;
       }
     }
-  }
-
-  if (recycled_count > 0) {
-    printf("[GC Industriel] Nettoyage : %d bloc(s) recyclé(s) en O(1).\n", recycled_count);
   }
 }
