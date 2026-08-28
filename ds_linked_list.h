@@ -1,10 +1,14 @@
 #ifndef ds_linked_list_h
 #define ds_linked_list_h
 
-#include <stdalign.h>
 #include <stdbool.h>
 
 #include "common.h"
+#include "ds_arena.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct _ds_list_node_ {
   ds_node_t value;
@@ -13,14 +17,23 @@ typedef struct _ds_list_node_ {
 } ds_list_node_t;
 
 typedef struct {
-  alignas(16) ds_list_node_t *head;
+  DS_ALIGNAS(ARENA_ALIGN) ds_list_node_t *head;
   size_t length;
 } ds_list_t;
 
-extern ds_list_t *ds_list_new(_ds_arena_t_ *a);
-extern void ds_list_append(_ds_arena_t_ *a, ds_list_t *list, ds_node_t value);
-extern void ds_list_prepend(_ds_arena_t_ *a, ds_list_t *list, ds_node_t value);
-extern ds_list_node_t *ds_list_find(const ds_list_t *list, ds_node_t value, bool (*match_func)(ds_node_t, ds_node_t));
-extern bool ds_list_remove(_ds_arena_t_ *a, ds_list_t *list, ds_list_node_t *node);
+/* Descriptors are exported so that containers built on top of the list
+ * (stack, queue, graph) can trace through it. */
+extern const ds_type_descriptor_t ds_list_descriptor;
+extern const ds_type_descriptor_t ds_list_node_descriptor;
 
-#endif  // ds_linked_list_h
+ds_list_t *ds_list_new(_ds_arena_t_ *a);
+void ds_list_append(_ds_arena_t_ *a, ds_list_t *list, ds_node_t value);
+void ds_list_prepend(_ds_arena_t_ *a, ds_list_t *list, ds_node_t value);
+ds_list_node_t *ds_list_find(const ds_list_t *list, ds_node_t value, bool (*match_func)(ds_node_t, ds_node_t));
+bool ds_list_remove(_ds_arena_t_ *a, ds_list_t *list, ds_list_node_t *node);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ds_linked_list_h */

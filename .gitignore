@@ -1,4 +1,32 @@
+# CMake / build output
 build/
+build-*/
+out/
+cmake-build-*/
 .cache/
 compile_commands.json
 
+# MSVC / Visual Studio
+*.vcxproj*
+*.sln
+*.slnx
+*.suo
+*.user
+.vs/
+Debug/
+Release/
+x64/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.tlog
+
+# GCC / Clang
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+*.out

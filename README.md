@@ -1,28 +1,70 @@
 # Managed Arena & Tagged-Pointer Data Structures Framework
 
-A high-performance, low-latency C11 data structures library backed by a **Managed Memory Arena** and a **Mark-and-Sweep Garbage Collector**.
+A C11 data structures library backed by a **managed memory arena** and a
+**mark-and-sweep garbage collector**.
 
-By leveraging **Tagged Pointers** on a strict 16-byte alignment constraint, this framework completely bypasses the OS kernel allocator (`malloc`/`free`) during runtime, achieving near-zero memory fragmentation, maximized CPU cache locality, and atomic-speed element tracking.
+By leveraging **tagged pointers** on a strict 16-byte alignment constraint, the
+framework avoids `malloc`/`free` on the hot path, keeps allocations dense for
+cache locality, and tracks live objects without a per-object header.
 
-## Key Architectural Innovations
+Builds and passes its test suite on **Linux, macOS and Windows**, under
+**GCC, Clang, MSVC and MinGW-w64**, on 32-bit and 64-bit targets.
 
-### 1. 16-Byte Aligned Tagged Pointers
+## Key Architectural Ideas
 
-On 64-bit systems, memory returned by our Arena is strictly aligned to 16 bytes. This guarantees that the **4 least significant bits** of any valid node address are always `0` (`...0000` in binary). We reclaim these 4 bits to store structural type identifiers (_Tags_) directly inside the pointer variable without dereferencing it:
+### 1. 16-byte aligned tagged pointers
 
-- Immediate integers, floats, and booleans require **zero heap allocations**—their values are encoded directly inside the 64-bit `ds_node_t` pointer register.
-- Complex data structures (strings, nodes, maps) clear the tag using a fast bitwise mask (`& ~0xF`) before reading the physical memory address.
+Memory returned by the arena is aligned to 16 bytes, which guarantees the four
+least significant bits of any object address are zero. Those four bits carry a
+type tag inside the pointer word itself:
 
-### 2. Managed Arena with Segregated Free-List
+- Integers, floats and booleans are encoded directly in the `ds_node_t` word
+  and need no heap allocation at all.
+- Heap objects (strings, list nodes, maps) clear the tag with `& ~0xF` before
+  dereferencing.
 
-Unlike standard bump allocators that block memory until the entire arena is destroyed, this library implements an explicit **Free-List recycling loop**.
+`ds_node_t` is a fixed 64-bit word rather than a `uintptr_t`, so the encoding
+holds a full 32-bit `int` or `float` payload plus its tag on 32-bit targets too.
 
-- Dead nodes swept by the Garbage Collector are attached to an isolated, un-erasable metadata cell list.
-- Future allocation requests intercept these cells in **O(1) time** instead of moving the global bump pointer forward, achieving an optimized memory footprint.
+### 2. Arena with a chunk-local free list
 
-### 3. Decoupled Graph-Topology Garbage Collection
+Rather than blocking memory until the arena is destroyed, dead blocks are
+pushed onto a free list that is confined to the chunk they came from, so a
+block can never be handed back into a different chunk's address range.
+Allocation checks that free list (up to `DS_FREELIST_SCAN_LIMIT` cells, which
+keeps allocation O(1) rather than O(free blocks)) before advancing the bump
+pointer, and adjacent blocks are coalesced on release.
 
-The framework includes a fully modular **Mark-and-Sweep Garbage Collector**. To prevent cyclic dependencies (such as directed graph loop mutations \(A \leftrightarrow B\)) from creating permanent memory leaks, the GC uses abstract connectivity tracing. Data structures hook into the GC using **callback extensions**, keeping the core memory manager completely generic.
+### 3. Descriptor-driven mark and sweep
+
+The collector is generic: it knows nothing about lists, maps or graphs. Each
+type registers a `ds_type_descriptor_t` with a `mark` callback (enqueue the
+objects I reference) and a `finalize` callback (release the raw buffers I own).
+Marking is iterative and cycle-safe, so mutually referencing structures such as
+`A <-> B` are collected correctly instead of leaking.
+
+```c
+static void my_type_mark(ds_node_t node, _ds_arena_t_ *a) {
+    MyType *self = (MyType *)ds_get_ptr(node);
+    ds_gc_push_mark_stack_context(a, self->some_child);
+}
+
+static void my_type_finalize(void *ptr, _ds_arena_t_ *a) {
+    MyType *self = (MyType *)ptr;
+    ds_arena_recycle_raw(a, self->raw_buffer, self->raw_buffer_bytes);
+}
+
+static const ds_type_descriptor_t my_descriptor = { my_type_mark, my_type_finalize };
+```
+
+### 4. Runtime-dispatched SIMD
+
+`ds_str_find` uses an AVX2 kernel when the compiler can emit it *and*
+`ds_cpu_has_avx2()` confirms the running CPU and OS support it (including the
+`XGETBV` check for YMM state saving). Everywhere else — non-x86, older x86, a
+build without AVX2 support — it falls back to a scalar `memchr`-driven search
+that produces identical results. Set `DS_NO_AVX2=1` in the environment to force
+the scalar path.
 
 ---
 
@@ -30,81 +72,135 @@ The framework includes a fully modular **Mark-and-Sweep Garbage Collector**. To 
 
 ### Prerequisites
 
-- **CMake** (v3.20 or higher)
-- A C11 compatible compiler (**GCC**, **Clang**, or **MSVC**)
+- **CMake** 3.20 or newer
+- A C11 compiler: GCC, Clang, MSVC (VS 2019 16.8+) or MinGW-w64
 
-### Building the Project
-
-We use CMake to compile both the memory static library (`libds_arena.a`), the primary data structures library (`libds.a`), and the main telemetry executable binary.
+### Building
 
 ```bash
-# Generate the build system directory
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-
-# Compile all modules (-O3 optimized)
 cmake --build build --config Release
+ctest --test-dir build --build-config Release --output-on-failure
 ```
+
+On Windows the same three commands work verbatim from a Developer Command
+Prompt, or with `-G "Visual Studio 17 2022"`.
+
+### Build options
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `DS_BUILD_TESTS` | `ON` | Build and register the `ds_tests` suite |
+| `DS_BUILD_BENCH` | `ON` | Build the benchmark executables |
+| `DS_WERROR` | `OFF` | Treat compiler warnings as errors |
+| `DS_NATIVE_ARCH` | `OFF` | Add `-march=native`. Faster, but the resulting binary is not portable to other CPUs — leave it off for anything you distribute |
 
 ---
 
-## API Code Example
-
-The following example demonstrates how to initialize the **Managed Arena**, register a **Live Root Variable** to protect it from being swept, manipulate immediate data types via bitwise shifts, and trigger the internal **Garbage Collector** to recycle unreferenced blocks instantly.
+## API Example
 
 ```c
+#include <stdio.h>
+
 #include "ds_arena.h"
 #include "ds_linked_list.h"
 #include "gc.h"
-#include <stdio.h>
 
-int main() {
-    // 1. Initialize the Managed Memory Arena (0 uses default 1MB chunks)
-    _ds_arena_t_ arena = ds_arena_new(0);
+int main(void) {
+    /* 1. Create the arena (0 selects the default 1 MiB chunk size).
+     *    ds_arena_new returns a POINTER; the arena is never a value type. */
+    _ds_arena_t_ *arena = ds_arena_new(0);
 
-    // 2. Declare your data structure entry point as a Tagged Pointer (ds_node_t)
-    // Initially, set it to the fixed immediate NIL tag pattern
-    ds_node_t my_list_root = ds_tag_ptr(NULL, TYPE_NIL);
+    /* 2. Declare the entry point to your data as a tagged word. */
+    ds_node_t my_list_root = ds_make_nil();
 
-    // 3. Register your root variable pointer with the Garbage Collector.
-    // This variable acts as a 'Live Root'—anything reachable from it will be safe.
-    ds_gc_register_root(&arena, &my_list_root);
+    /* 3. Register it as a GC root: anything reachable from it stays alive. */
+    ds_gc_register_root(arena, &my_list_root);
 
-    // 4. Allocate elements directly from the Arena without malloc()
-    // Append an immediate 32-bit integer (Stores directly in the pointer register!)
-    ds_list_t *list_handle = ds_list_new(&arena);
-    my_list_root = ds_tag_ptr(list_handle, TYPE_NODE);
+    /* 4. Allocate from the arena, never from malloc. */
+    ds_list_t *list = ds_list_new(arena);
+    my_list_root = ds_tag_ptr(list, TYPE_NODE);
 
-    ds_list_append(&arena, list_handle, ds_make_int(42));
-    ds_list_append(&arena, list_handle, ds_make_int(100));
-    ds_list_append(&arena, list_handle, ds_make_int(200));
+    ds_list_append(arena, list, ds_make_int(42));
+    ds_list_append(arena, list, ds_make_int(100));
+    ds_list_append(arena, list, ds_make_int(200));
 
-    printf("Initial List Size: %zu\n", list_handle->length); // Outputs: 3
+    printf("Initial list size: %zu\n", list->length);   /* 3 */
 
-    // 5. Simulate data deletion by pulling a node out of the active chain
-    ds_list_node_t *node_to_delete = ds_list_find(list_handle, ds_make_int(100), NULL);
-    if (node_to_delete) {
-        // Disconnects links and immediately inserts the node into the Arena's local Free-List
-        ds_list_remove(&arena, list_handle, node_to_delete);
-    }
+    /* 5. Unlink a node; it goes straight onto the chunk's free list. */
+    ds_list_node_t *doomed = ds_list_find(list, ds_make_int(100), NULL);
+    if (doomed) ds_list_remove(arena, list, doomed);
 
-    // 6. Run the Garbage Collector
-    // Scans your root registries, traces graph/linear blocks, and purges orphans.
-    // The dead '100' node is safely recycled back to the arena free stack.
-    ds_arena_run_gc(&arena);
+    /* 6. Collect. The list and its remaining nodes are reachable from the
+     *    root, so they survive; anything orphaned is swept. */
+    ds_arena_run_gc(arena);
 
-    // 7. Reallocate a new item
-    // The allocator intercepts the top of the Free-List first, reusing the dead node
-    // in O(1) time without advancing the arena's global bump pointer offset.
-    ds_list_append(&arena, list_handle, ds_make_int(999));
+    /* 7. The next allocation reuses the recycled block in O(1). */
+    ds_list_append(arena, list, ds_make_int(999));
 
-    // Print Telemetry Reports to track memory reuse accuracy
-    ds_arena_print_stats(&arena);
+    ds_arena_print_stats(arena);
 
-    // 8. Clean up everything safely before exit
-    ds_arena_destroy(&arena); // Destroys all backing OS memory chunks
-    ds_gc_destroy();          // Frees structural internal execution trackers
+    /* 8. Drop the root before its storage goes out of scope, then tear the
+     *    arena down. ds_arena_destroy frees everything in one pass -- there
+     *    is no separate collector teardown call. */
+    ds_gc_unregister_root(arena, &my_list_root);
+    ds_arena_destroy(arena);
 
     printf("Execution completed cleanly.\n");
     return 0;
 }
 ```
+
+---
+
+## Modules
+
+| Header | Contents |
+| --- | --- |
+| `memory/include/ds_platform.h` | Compiler/OS/arch shims, `ds_time_ms`, `ds_cpu_has_avx2` |
+| `memory/include/common.h` | `ds_node_t`, tagging helpers, arena and GC types |
+| `memory/include/ds_arena.h` | Arena allocation and recycling |
+| `memory/include/gc.h` | Roots, registration, `ds_arena_run_gc` |
+| `ds_dyn_array.h` | `ds_array_t` (struct handle) and `ds_da_*` (bare pointer) arrays |
+| `ds_string.h` | Length-prefixed strings, SIMD substring search, split/join/format |
+| `ds_linked_list.h` | Circular doubly linked list |
+| `ds_stack_queue.h` | Stack and queue over the list |
+| `ds_priority_queue.h` | Binary min-heap |
+| `ds_hash_map.h` | String-keyed chaining hash map with auto-resize |
+| `ds_graph.h` | Adjacency-list graph |
+
+### Two dynamic array styles
+
+```c
+/* Struct handle: explicit element size, works with any element type. */
+ds_array_t *v = ds_array_new(arena, sizeof(int), 16, 0);
+int x = 7;
+ds_array_push(arena, v, &x);
+
+/* Bare pointer: NULL is a valid empty array, no constructor needed. */
+int *xs = NULL;
+ds_da_push(arena, xs, 7);
+printf("%zu of %zu\n", ds_da_len(xs), ds_da_cap(xs));
+ds_da_free(arena, xs);
+```
+
+The `ds_da_*` macros evaluate their array argument more than once, so do not
+pass an expression with side effects.
+
+---
+
+## Memory ownership rules
+
+- `ds_arena_alloc(a, size, desc)` — **managed**. The collector may sweep it.
+  Pass a descriptor if the object references other objects or owns raw buffers.
+- `ds_arena_alloc_raw(a, size)` — **unmanaged**. Never swept, never traced. Use
+  it for payload buffers owned by a managed object, and release them from that
+  object's `finalize` callback.
+- Do not call `ds_arena_recycle` on a managed object that is still reachable;
+  let the collector handle it.
+- A GC root points at a `ds_node_t` *variable*. If that variable is a local,
+  call `ds_gc_unregister_root` before the frame goes away.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

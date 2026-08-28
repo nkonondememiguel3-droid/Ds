@@ -6,30 +6,78 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_compile_options(-O3 -march=native)
+# Single-config generators (Makefiles, Ninja) default to no optimisation and
+# no NDEBUG unless a build type is picked.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
+option(DS_NATIVE_ARCH  "Tune the build for the host CPU (not portable binaries)" OFF)
+option(DS_WERROR       "Treat warnings as errors" OFF)
+option(DS_BUILD_TESTS  "Build the test suite" ON)
+option(DS_BUILD_BENCH  "Build the benchmark executables" ON)
+
+# --------------------------------------------------------------------
+# Per-compiler flags
+# --------------------------------------------------------------------
+#
+# The previous version called add_compile_options(-O3 -march=native)
+# unconditionally. Those are GCC/Clang spellings: MSVC rejects them (they are
+# read as source file names after /-flag parsing), which is the first reason
+# the Windows build failed. -march=native additionally emits instructions the
+# build machine has but the target machine may not, so it is now opt-in.
+
+function(ds_set_target_flags target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE
+            /W4
+            /wd4324          # structure padded due to alignment specifier -- intentional
+            $<$<CONFIG:Release>:/O2>
+            $<$<CONFIG:RelWithDebInfo>:/O2>
+        )
+        target_compile_definitions(${target} PRIVATE
+            _CRT_SECURE_NO_WARNINGS
+            _CRT_NONSTDC_NO_WARNINGS
+        )
+        if(DS_WERROR)
+            target_compile_options(${target} PRIVATE /WX)
+        endif()
+    else()
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wshadow -Wpointer-arith -Wcast-align -Wstrict-prototypes
+            $<$<CONFIG:Release>:-O3>
+            $<$<CONFIG:RelWithDebInfo>:-O2>
+        )
+        if(DS_NATIVE_ARCH)
+            include(CheckCCompilerFlag)
+            check_c_compiler_flag("-march=native" DS_HAS_MARCH_NATIVE)
+            if(DS_HAS_MARCH_NATIVE)
+                target_compile_options(${target} PRIVATE -march=native)
+            endif()
+        endif()
+        if(DS_WERROR)
+            target_compile_options(${target} PRIVATE -Werror)
+        endif()
+    endif()
+endfunction()
 
 add_subdirectory(memory)
 
+# --------------------------------------------------------------------
+# Core library -- every module now compiles, so every module is built
+# --------------------------------------------------------------------
 set(source
-  ds_dyn_array.c
-  ds_dyn_array.h
-  # ds_string.h
-  # ds_string.c
-  # ds_graph.h
-  # ds_graph.c
-  # ds_hash_map.c
-  # ds_hash_map.h
-  # ds_linked_list.h
-  # ds_linked_list.c
-  # ds_stack_queue.h
-  # ds_stack_queue.c
-  # ds_priority_queue.h
-  # ds_priority_queue.c
+    ds_dyn_array.c      ds_dyn_array.h
+    ds_string.c         ds_string.h
+    ds_graph.c          ds_graph.h
+    ds_hash_map.c       ds_hash_map.h
+    ds_linked_list.c    ds_linked_list.h
+    ds_stack_queue.c    ds_stack_queue.h
+    ds_priority_queue.c ds_priority_queue.h
 )
 
 add_library(${PROJECT_NAME} STATIC ${source})
-
-target_compile_options(${PROJECT_NAME} PRIVATE)
+ds_set_target_flags(${PROJECT_NAME})
 
 target_include_directories(${PROJECT_NAME} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -37,12 +85,44 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 target_link_libraries(${PROJECT_NAME} PUBLIC ds_arena)
 
-# debuging purposes
-# add_executable(main main.c)
-# target_link_libraries(main PRIVATE ${PROJECT_NAME})
-# add_executable(benchmarck benchmarck.c)
-# target_link_libraries(benchmarck PRIVATE ${PROJECT_NAME} rt)
-add_executable(dynamic_array_benchmark dynamic_array_benchmark.c)
-target_link_libraries(dynamic_array_benchmark PRIVATE ${PROJECT_NAME} rt)
-add_executable(bench_dyn_array_performance tests/bench_dyn_array_performance.c)
-target_link_libraries(bench_dyn_array_performance PRIVATE ${PROJECT_NAME} rt)
+# On Unix, linking libm is needed for the floating point helpers in some
+# libc builds; it does not exist (and is not needed) on Windows.
+if(UNIX)
+    target_link_libraries(${PROJECT_NAME} PUBLIC m)
+endif()
+
+# --------------------------------------------------------------------
+# Executables
+# --------------------------------------------------------------------
+function(ds_add_program name)
+    add_executable(${name} ${ARGN})
+    ds_set_target_flags(${name})
+    target_link_libraries(${name} PRIVATE ${PROJECT_NAME})
+endfunction()
+
+if(DS_BUILD_BENCH)
+    ds_add_program(dynamic_array_benchmark dynamic_array_benchmark.c)
+    ds_add_program(bench_dyn_array_performance tests/bench_dyn_array_performance.c)
+    ds_add_program(benchmark benchmark.c)
+    ds_add_program(main main.c)
+endif()
+
+if(DS_BUILD_TESTS)
+    enable_testing()
+    ds_add_program(ds_tests tests/test_ds.c)
+    add_test(NAME ds_tests COMMAND ds_tests)
+endif()
+
+# --------------------------------------------------------------------
+# Install
+# --------------------------------------------------------------------
+install(TARGETS ${PROJECT_NAME} ds_arena
+        ARCHIVE DESTINATION lib)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ DESTINATION include
+        FILES_MATCHING PATTERN "*.h"
+        PATTERN "build" EXCLUDE
+        PATTERN "tests" EXCLUDE
+        PATTERN "memory" EXCLUDE
+        PATTERN ".git" EXCLUDE)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/memory/include/ DESTINATION include
+        FILES_MATCHING PATTERN "*.h")

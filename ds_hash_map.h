@@ -1,9 +1,13 @@
 #ifndef ds_hash_map_h
 #define ds_hash_map_h
 
-#include <stdalign.h>
 #include "common.h"
+#include "ds_arena.h"
 #include "ds_string.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct _ds_hash_entry_ {
   ds_string_t *key;
@@ -12,15 +16,22 @@ typedef struct _ds_hash_entry_ {
 } _ds_hash_entry_t_;
 
 typedef struct {
-  alignas(16) _ds_hash_entry_t_ **buckets;
+  DS_ALIGNAS(ARENA_ALIGN) _ds_hash_entry_t_ **buckets;
   size_t bucket_count;
   size_t size;
 } ds_hash_map_t;
 
-extern ds_hash_map_t *ds_map_new(_ds_arena_t_ *a, size_t initial_buckets);
-extern void ds_map_put(_ds_arena_t_ *a, ds_hash_map_t *map, ds_string_t *key, ds_node_t value);
-extern ds_node_t ds_map_get(const ds_hash_map_t *map, const ds_string_t *key);
-extern bool ds_map_remove(_ds_arena_t_ *a, ds_hash_map_t *map, const ds_string_t *key);
-extern void ds_map_resize(_ds_arena_t_ *a, ds_hash_map_t *map, size_t new_bucket_count);
+extern const ds_type_descriptor_t ds_map_descriptor;
+extern const ds_type_descriptor_t ds_map_entry_descriptor;
 
-#endif  // ds_hash_map_h
+ds_hash_map_t *ds_map_new(_ds_arena_t_ *a, size_t initial_buckets);
+void ds_map_put(_ds_arena_t_ *a, ds_hash_map_t *map, ds_string_t *key, ds_node_t value);
+ds_node_t ds_map_get(const ds_hash_map_t *map, const ds_string_t *key);
+bool ds_map_remove(_ds_arena_t_ *a, ds_hash_map_t *map, const ds_string_t *key);
+void ds_map_resize(_ds_arena_t_ *a, ds_hash_map_t *map, size_t new_bucket_count);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ds_hash_map_h */

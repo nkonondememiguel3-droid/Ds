@@ -2,26 +2,38 @@
 #define ds_stack_queue_h
 
 #include "common.h"
+#include "ds_arena.h"
 #include "ds_linked_list.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
-    ds_list_t *list;
+  DS_ALIGNAS(ARENA_ALIGN) ds_list_t *list;
 } ds_stack_t;
 
 typedef struct {
-    ds_list_t *list;
+  DS_ALIGNAS(ARENA_ALIGN) ds_list_t *list;
 } ds_queue_t;
 
-extern ds_stack_t* ds_stack_new(_ds_arena_t_ *a);
-extern void        ds_stack_push(_ds_arena_t_ *a, ds_stack_t *stack, ds_node_t value);
-extern ds_node_t   ds_stack_pop(_ds_arena_t_ *a, ds_stack_t *stack);
-extern ds_node_t   ds_stack_peek(const ds_stack_t *stack);
-extern size_t      ds_stack_size(const ds_stack_t *stack);
+extern const ds_type_descriptor_t ds_stack_descriptor;
+extern const ds_type_descriptor_t ds_queue_descriptor;
 
-extern ds_queue_t* ds_queue_new(_ds_arena_t_ *a);
-extern void        ds_queue_enqueue(_ds_arena_t_ *a, ds_queue_t *queue, ds_node_t value);
-extern ds_node_t   ds_queue_dequeue(_ds_arena_t_ *a, ds_queue_t *queue);
-extern ds_node_t   ds_queue_peek(const ds_queue_t *queue);
-extern size_t      ds_queue_size(const ds_queue_t *queue);
+ds_stack_t *ds_stack_new(_ds_arena_t_ *a);
+void ds_stack_push(_ds_arena_t_ *a, ds_stack_t *stack, ds_node_t value);
+ds_node_t ds_stack_pop(_ds_arena_t_ *a, ds_stack_t *stack);
+ds_node_t ds_stack_peek(const ds_stack_t *stack);
+size_t ds_stack_size(const ds_stack_t *stack);
 
-#endif // ds_stack_queue_h
+ds_queue_t *ds_queue_new(_ds_arena_t_ *a);
+void ds_queue_enqueue(_ds_arena_t_ *a, ds_queue_t *queue, ds_node_t value);
+ds_node_t ds_queue_dequeue(_ds_arena_t_ *a, ds_queue_t *queue);
+ds_node_t ds_queue_peek(const ds_queue_t *queue);
+size_t ds_queue_size(const ds_queue_t *queue);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ds_stack_queue_h */
