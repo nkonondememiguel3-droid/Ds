@@ -15,6 +15,8 @@ endif()
 option(DS_NATIVE_ARCH  "Tune the build for the host CPU (not portable binaries)" OFF)
 option(DS_WERROR       "Treat warnings as errors" OFF)
 option(DS_BUILD_TESTS  "Build the test suite" ON)
+option(DS_BUILD_FUZZ   "Build the fuzz harnesses" ON)
+option(DS_LIBFUZZER    "Drive the fuzzers with clang libFuzzer instead of the built-in driver" OFF)
 option(DS_BUILD_BENCH  "Build the benchmark executables" ON)
 
 # --------------------------------------------------------------------
@@ -117,6 +119,25 @@ if(DS_BUILD_TESTS)
         ds_add_program(test_${suite} tests/test_${suite}.c)
         target_include_directories(test_${suite} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
         add_test(NAME ${suite} COMMAND test_${suite})
+    endforeach()
+endif()
+
+set(DS_FUZZ_SUITES string arena containers)
+
+if(DS_BUILD_FUZZ)
+    foreach(suite IN LISTS DS_FUZZ_SUITES)
+        ds_add_program(fuzz_${suite} tests/fuzz_${suite}.c)
+        target_include_directories(fuzz_${suite} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        if(DS_LIBFUZZER)
+            # Coverage-guided. Requires clang with the fuzzer runtime.
+            target_compile_definitions(fuzz_${suite} PRIVATE DS_FUZZ_LIBFUZZER)
+            target_compile_options(fuzz_${suite} PRIVATE -fsanitize=fuzzer)
+            target_link_options(fuzz_${suite} PRIVATE -fsanitize=fuzzer)
+        elseif(DS_BUILD_TESTS)
+            # The built-in driver runs anywhere, so a short pass is part of
+            # the ordinary test run. Longer campaigns: fuzz_string 5000000
+            add_test(NAME fuzz_${suite} COMMAND fuzz_${suite} 3000 1)
+        endif()
     endforeach()
 endif()
 

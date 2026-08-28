@@ -115,26 +115,34 @@ void ds_gc_unregister_allocation(_ds_arena_t_ *a, void *ptr) {
 /* Collection                                                          */
 /* ------------------------------------------------------------------ */
 
-static void ds_gc_sweep_chunk(_ds_arena_t_ *a, _ds_arena_chunk_t_ *c) {
+/*
+ * Sweeping runs in two separate passes over every chunk, and they cannot be
+ * merged into one.
+ *
+ * A finalizer is allowed to touch the arena -- that is the whole point of
+ * having one, and every container here uses it to hand back the raw payload
+ * buffer it owns. Those buffers usually sit later in the same chunk as their
+ * owner. Rebuilding the free list in the same walk that runs finalizers
+ * therefore lets a finalizer push a block onto the list, after which the
+ * walk reaches that same block, sees DS_BLOCK_FREE, and pushes it a second
+ * time. Two links into one cell make the list cyclic, and the next
+ * traversal never terminates.
+ *
+ * So: phase A finalizes and marks dead blocks free, touching no list.
+ * Phase B rebuilds every list from the block states alone. Anything a
+ * finalizer recycled in phase A is simply discovered in phase B by its
+ * state, exactly once.
+ */
+
+static void ds_gc_finalize_chunk(_ds_arena_t_ *a, _ds_arena_chunk_t_ *c) {
   char *p = c->payload;
   char *end = c->payload + c->chunk_size_used;
-  _ds_block_header_t_ *run = NULL; /* open run of adjacent free blocks */
-
-  /* The free list is rebuilt from scratch by this walk, which is what lets
-   * adjacent dead blocks be merged: the walk visits blocks in address
-   * order, so neighbours are consecutive iterations. The previous
-   * head-insert scheme only ever merged a block with whatever happened to
-   * be at the head of the list, and the sweep visited objects in pointer-
-   * hash order, so in practice it merged almost nothing. */
-  c->free_list_head = NULL;
 
   while (p < end) {
     _ds_block_header_t_ *h = (_ds_block_header_t_ *)(void *)p;
     size_t step = h->total_size;
 
     if (step < DS_MIN_BLOCK || p + step > end) {
-      /* A corrupted header would desynchronise the walk; stop rather than
-       * run off the end of the chunk. */
       fputs("ds: arena corruption detected during sweep\n", stderr);
       abort();
     }
@@ -151,11 +159,36 @@ static void ds_gc_sweep_chunk(_ds_arena_t_ *a, _ds_arena_chunk_t_ *c) {
         h->state = DS_BLOCK_FREE;
         h->descriptor = NULL;
 
-        /* The block is already out of the live accounting before the
-         * finalizer runs, so a finalizer that touches the arena cannot
-         * observe a half-dead object. */
+        /* The block is out of the live accounting before the finalizer
+         * runs, so a finalizer that touches the arena cannot observe a
+         * half-dead object. */
         if (desc && desc->finalize) desc->finalize(payload, a);
       }
+    }
+
+    p += step;
+  }
+}
+
+static void ds_gc_rebuild_chunk(_ds_arena_t_ *a, _ds_arena_chunk_t_ *c) {
+  char *p = c->payload;
+  char *end = c->payload + c->chunk_size_used;
+  _ds_block_header_t_ *run = NULL; /* open run of adjacent free blocks */
+
+  c->free_list_head = NULL;
+
+  /* The walk visits blocks in address order, so neighbours are consecutive
+   * iterations and merging them is a comparison away. The previous
+   * head-insert scheme could only ever merge a block with whatever happened
+   * to be at the head of the list, and the old sweep visited objects in
+   * pointer-hash order, so in practice it merged nothing. */
+  while (p < end) {
+    _ds_block_header_t_ *h = (_ds_block_header_t_ *)(void *)p;
+    size_t step = h->total_size;
+
+    if (step < DS_MIN_BLOCK || p + step > end) {
+      fputs("ds: arena corruption detected during sweep\n", stderr);
+      abort();
     }
 
     if (h->state == DS_BLOCK_FREE) {
@@ -172,6 +205,23 @@ static void ds_gc_sweep_chunk(_ds_arena_t_ *a, _ds_arena_chunk_t_ *c) {
     }
 
     p += step;
+  }
+
+  /* A merged run's size grew after it was linked, so the byte total has to
+   * be taken from the finished list rather than accumulated above. */
+  {
+    const _ds_free_cell_t_ *fc;
+    size_t chunk_free = 0;
+    for (fc = c->free_list_head; fc; fc = fc->next) {
+      chunk_free += (((const _ds_block_header_t_ *)fc) - 1)->total_size;
+    }
+    a->total_free_bytes_in_list += chunk_free;
+  }
+
+  if (c->free_list_head) {
+    c->on_free_ring = 1;
+    c->next_free_chunk = a->free_chunks;
+    a->free_chunks = c;
   }
 }
 
@@ -205,23 +255,32 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
     if (h->descriptor && h->descriptor->mark) h->descriptor->mark(node, a);
   }
 
-  /* ---- 3. Sweep, chunk by chunk, in address order ---- */
-  a->total_free_bytes_in_list = 0;
-  a->free_chunks = NULL;
-  for (c = a->head; c; c = c->next_arena_chunk) {
-    const _ds_free_cell_t_ *fc;
+  /* ---- 3. Sweep ---- */
 
+  /* Drop every free list before finalizers run. A finalizer may allocate,
+   * and it must not be handed a block out of a list that is about to be
+   * rebuilt from scratch. Until phase B repopulates them, allocation falls
+   * through to the bump pointer, which is always safe. */
+  for (c = a->head; c; c = c->next_arena_chunk) {
+    c->free_list_head = NULL;
     c->on_free_ring = 0;
     c->next_free_chunk = NULL;
-    ds_gc_sweep_chunk(a, c);
-
-    for (fc = c->free_list_head; fc; fc = fc->next) {
-      a->total_free_bytes_in_list += (((const _ds_block_header_t_ *)fc) - 1)->total_size;
-    }
-    if (c->free_list_head) {
-      c->on_free_ring = 1;
-      c->next_free_chunk = a->free_chunks;
-      a->free_chunks = c;
-    }
   }
+  a->free_chunks = NULL;
+  a->total_free_bytes_in_list = 0;
+
+  for (c = a->head; c; c = c->next_arena_chunk) ds_gc_finalize_chunk(a, c);
+
+  /* Phase B discards whatever the finalizers linked and derives the free
+   * lists from block state alone, so every free block is linked exactly
+   * once however the finalizers behaved. */
+  for (c = a->head; c; c = c->next_arena_chunk) {
+    c->free_list_head = NULL;
+    c->on_free_ring = 0;
+    c->next_free_chunk = NULL;
+  }
+  a->free_chunks = NULL;
+  a->total_free_bytes_in_list = 0;
+
+  for (c = a->head; c; c = c->next_arena_chunk) ds_gc_rebuild_chunk(a, c);
 }
