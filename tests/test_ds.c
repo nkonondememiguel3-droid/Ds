@@ -616,6 +616,143 @@ static void test_gc_traces_containers(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Inline block headers (the side hash table replacement)              */
+/* ------------------------------------------------------------------ */
+
+static size_t largest_free(const _ds_arena_t_ *a) {
+  const _ds_arena_chunk_t_ *c;
+  size_t largest = 0;
+  for (c = a->head; c; c = c->next_arena_chunk) {
+    const _ds_free_cell_t_ *fc;
+    for (fc = c->free_list_head; fc; fc = fc->next) {
+      size_t sz = (((const _ds_block_header_t_ *)fc) - 1)->total_size;
+      if (sz > largest) largest = sz;
+    }
+  }
+  return largest;
+}
+
+static void test_block_headers(void) {
+  _ds_arena_t_ *a = ds_arena_new(0);
+  void *raw, *managed;
+  size_t free_before;
+
+  SECTION("block headers");
+
+  CHECK(sizeof(_ds_block_header_t_) == ARENA_ALIGN,
+        "the header is exactly one alignment granule, so payloads stay taggable");
+
+  raw = ds_arena_alloc_raw(a, 64);
+  managed = ds_arena_alloc(a, 64, NULL);
+  CHECK(ds_block_of(raw)->state == DS_BLOCK_RAW, "a raw allocation is marked raw");
+  CHECK(ds_block_of(managed)->state == DS_BLOCK_MANAGED, "a managed allocation is marked managed");
+  CHECK(ds_block_of(raw)->magic == DS_BLOCK_MAGIC, "the header carries its magic");
+  CHECK(ds_block_of(raw)->total_size == 64 + ARENA_ALIGN, "total_size covers header plus payload");
+
+  /* The size argument to recycle is now advisory: the header is
+   * authoritative, which removes the whole class of bugs where a caller
+   * passed a length that did not match what it had allocated. */
+  ds_arena_recycle_raw(a, raw, 999999);
+  CHECK(a->total_free_bytes_in_list == 64 + ARENA_ALIGN,
+        "regression: a wrong size passed to recycle is ignored in favour of the header");
+
+  free_before = a->total_free_bytes_in_list;
+  ds_arena_recycle_raw(a, raw, 64);
+  CHECK(a->total_free_bytes_in_list == free_before, "recycling the same block twice is a no-op");
+
+  /* A raw payload reached through a tagged node must be skipped by the
+   * collector rather than treated as an object. */
+  {
+    ds_node_t root = ds_tag_ptr(ds_arena_alloc_raw(a, 128), TYPE_STRING);
+    ds_gc_register_root(a, &root);
+    ds_arena_run_gc(a);
+    CHECK(1, "a tagged pointer to raw memory is safely ignored while marking");
+    ds_gc_unregister_root(a, &root);
+  }
+
+  ds_arena_destroy(a);
+}
+
+static void test_sweep_coalescing(void) {
+  _ds_arena_t_ *a = ds_arena_new(0);
+  int i;
+  size_t expected;
+
+  SECTION("sweep coalescing");
+
+  /* 200 unreachable managed objects, allocated back to back. */
+  for (i = 0; i < 200; i++) ds_arena_alloc(a, 48, NULL);
+  expected = 200 * (48 + ARENA_ALIGN);
+
+  ds_arena_run_gc(a);
+  CHECK(a->gc_live_allocations == 0, "all 200 orphans are swept");
+
+  /* The sweep walks each chunk in address order, so the 200 now-dead
+   * blocks are neighbours in the walk and merge into one region. The old
+   * head-insert scheme swept in pointer-hash order and merged nothing,
+   * leaving the free list as a pile of unusable 16-byte crumbs. */
+  CHECK(largest_free(a) >= expected * 9 / 10, "regression: adjacent dead blocks coalesce into one large free block");
+
+  {
+    /* And that merged region can actually serve a large request. */
+    void *big = ds_arena_alloc_raw(a, expected / 2);
+    CHECK(big != NULL && a->allocs_from_free_list > 0, "the coalesced region is reusable");
+  }
+
+  ds_arena_destroy(a);
+}
+
+static void test_mark_stack_bound(void) {
+  _ds_arena_t_ *a = ds_arena_new(0);
+  ds_list_t *list = ds_list_new(a);
+  ds_node_t root;
+  int i;
+
+  SECTION("mark stack bound");
+
+  for (i = 0; i < 20000; i++) ds_list_append(a, list, ds_make_int(i));
+  root = ds_tag_ptr(list, TYPE_NODE);
+  ds_gc_register_root(a, &root);
+  ds_arena_run_gc(a);
+
+  CHECK(list->length == 20000, "the list survives the collection intact");
+  /* Following `next` alone reaches every node on a circular chain; pushing
+   * `prev` too grew this stack to 32768 entries for the same 20k nodes. */
+  CHECK(a->gc_mark_stack_cap <= 2048, "regression: the mark stack stays bounded when tracing a long list");
+
+  ds_gc_unregister_root(a, &root);
+  ds_arena_destroy(a);
+}
+
+static void test_map_hash_cache(void) {
+  _ds_arena_t_ *a = ds_arena_new(0);
+  ds_hash_map_t *map = ds_map_new(a, 4);
+  char key[32];
+  int i, ok = 1;
+
+  SECTION("map hash cache");
+
+  for (i = 0; i < 500; i++) {
+    snprintf(key, sizeof(key), "cached-%d", i);
+    ds_map_put(a, map, ds_str_new(a, key), ds_make_int(i));
+  }
+  CHECK(map->bucket_count > 4, "the map grew through several resizes");
+
+  /* Every entry now carries its own hash; a resize reuses it instead of
+   * re-walking the key. If the cached value ever disagreed with the key,
+   * entries would land in the wrong bucket and lookups would miss. */
+  for (i = 0; i < 500; i++) {
+    ds_node_t v;
+    snprintf(key, sizeof(key), "cached-%d", i);
+    v = ds_map_get(map, ds_str_new(a, key));
+    if (ds_get_type(v) != TYPE_INT || ds_unpack_int(v) != i) ok = 0;
+  }
+  CHECK(ok, "every key is still found after the cached hashes are carried through resizes");
+
+  ds_arena_destroy(a);
+}
+
+/* ------------------------------------------------------------------ */
 
 int main(void) {
   printf("DS framework test suite\n");
@@ -636,6 +773,10 @@ int main(void) {
   test_graph();
   test_gc();
   test_gc_traces_containers();
+  test_block_headers();
+  test_sweep_coalescing();
+  test_mark_stack_bound();
+  test_map_hash_cache();
 
   printf("\n--------------------------------------------------\n");
   printf("%d checks run, %d failed\n", tests_run, tests_failed);

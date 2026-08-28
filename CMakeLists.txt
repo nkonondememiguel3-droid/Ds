@@ -100,17 +100,41 @@ function(ds_add_program name)
     target_link_libraries(${name} PRIVATE ${PROJECT_NAME})
 endfunction()
 
-if(DS_BUILD_BENCH)
-    ds_add_program(dynamic_array_benchmark dynamic_array_benchmark.c)
-    ds_add_program(bench_dyn_array_performance tests/bench_dyn_array_performance.c)
-    ds_add_program(benchmark benchmark.c)
-    ds_add_program(main main.c)
-endif()
+# One test executable and one benchmark executable per data structure, so a
+# failure names the structure it came from and any benchmark can be run on
+# its own.
+set(DS_TEST_SUITES
+    common arena gc dyn_array string
+    linked_list stack_queue priority_queue hash_map graph)
+
+set(DS_BENCH_SUITES
+    arena gc dyn_array string
+    linked_list stack_queue priority_queue hash_map graph)
 
 if(DS_BUILD_TESTS)
     enable_testing()
-    ds_add_program(ds_tests tests/test_ds.c)
-    add_test(NAME ds_tests COMMAND ds_tests)
+    foreach(suite IN LISTS DS_TEST_SUITES)
+        ds_add_program(test_${suite} tests/test_${suite}.c)
+        target_include_directories(test_${suite} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        add_test(NAME ${suite} COMMAND test_${suite})
+    endforeach()
+endif()
+
+if(DS_BUILD_BENCH)
+    set(DS_BENCH_TARGETS "")
+    foreach(suite IN LISTS DS_BENCH_SUITES)
+        ds_add_program(bench_${suite} tests/bench_${suite}.c)
+        target_include_directories(bench_${suite} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+        list(APPEND DS_BENCH_TARGETS bench_${suite})
+    endforeach()
+
+    ds_add_program(main main.c)
+
+    # `cmake --build build --target bench` builds and runs the whole set.
+    add_custom_target(bench DEPENDS ${DS_BENCH_TARGETS})
+    foreach(t IN LISTS DS_BENCH_TARGETS)
+        add_custom_command(TARGET bench POST_BUILD COMMAND $<TARGET_FILE:${t}>)
+    endforeach()
 endif()
 
 # --------------------------------------------------------------------

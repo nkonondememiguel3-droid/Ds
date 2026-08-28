@@ -30,3 +30,6 @@ x64/
 *.dylib
 *.exe
 *.out
+
+# clion
+.idea

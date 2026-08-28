@@ -20,13 +20,13 @@ _ds_arena_t_ *ds_arena_new(size_t chunk_size) {
   _ds_arena_t_ *a = (_ds_arena_t_ *)malloc(sizeof(_ds_arena_t_));
   if (!a) ds_oom("arena shell");
   memset(a, 0, sizeof(_ds_arena_t_));
-
   a->chunk_size = chunk_size ? chunk_size : ARENA_DEFAULT_CHUNK_SIZE;
-  a->gc_hash_size = GC_HASH_SIZE;
-  a->gc_buckets = (_ds_allocation_track_t_ **)calloc(a->gc_hash_size, sizeof(_ds_allocation_track_t_ *));
-  if (!a->gc_buckets) ds_oom("gc bucket table");
   return a;
 }
+
+/* ------------------------------------------------------------------ */
+/* Chunks                                                              */
+/* ------------------------------------------------------------------ */
 
 static _ds_arena_chunk_t_ *ds_arena_grow(_ds_arena_t_ *a, size_t needed) {
   size_t sz = (a->chunk_size > needed) ? a->chunk_size : needed;
@@ -34,11 +34,10 @@ static _ds_arena_chunk_t_ *ds_arena_grow(_ds_arena_t_ *a, size_t needed) {
   _ds_arena_chunk_t_ *c;
 
   sz = ds_arena_align_up(sz);
-  if (sz < needed) ds_oom("chunk size overflow"); /* align_up wrapped */
+  if (sz < needed) ds_oom("chunk size overflow");
 
   /* Over-allocate by ARENA_ALIGN so the payload can be pushed forward to a
-   * 16-byte boundary regardless of what malloc's own alignment happens to
-   * be on this platform (8 on 32-bit, 16 on LP64, unspecified in theory). */
+   * 16-byte boundary regardless of malloc's own alignment on this platform. */
   if (sz > (size_t)-1 - sizeof(_ds_arena_chunk_t_) - ARENA_ALIGN) ds_oom("chunk size overflow");
   c = (_ds_arena_chunk_t_ *)malloc(sizeof(_ds_arena_chunk_t_) + ARENA_ALIGN + sz);
   if (!c) ds_oom("arena chunk");
@@ -49,6 +48,8 @@ static _ds_arena_chunk_t_ *ds_arena_grow(_ds_arena_t_ *a, size_t needed) {
   c->chunk_size = sz;
   c->chunk_size_used = 0;
   c->free_list_head = NULL;
+  c->next_free_chunk = NULL;
+  c->on_free_ring = 0;
   c->next_arena_chunk = a->head;
   a->head = c;
 
@@ -57,142 +58,197 @@ static _ds_arena_chunk_t_ *ds_arena_grow(_ds_arena_t_ *a, size_t needed) {
   return c;
 }
 
-static void *ds_arena_alloc_base(_ds_arena_t_ *a, size_t size) {
+/* Put a chunk on the free ring the first time it acquires a free block. */
+static void ds_chunk_mark_free(_ds_arena_t_ *a, _ds_arena_chunk_t_ *c) {
+  if (c->on_free_ring) return;
+  c->on_free_ring = 1;
+  c->next_free_chunk = a->free_chunks;
+  a->free_chunks = c;
+}
+
+static _ds_arena_chunk_t_ *ds_chunk_owning(_ds_arena_t_ *a, const void *p) {
   _ds_arena_chunk_t_ *c;
+  for (c = a->head; c; c = c->next_arena_chunk) {
+    if ((const char *)p >= c->payload && (const char *)p < c->payload + c->chunk_size) return c;
+  }
+  return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Allocation                                                          */
+/* ------------------------------------------------------------------ */
+
+static void ds_block_init(_ds_block_header_t_ *h, size_t total, const ds_type_descriptor_t *desc, uint8_t state) {
+  h->descriptor = desc;
+  h->total_size = (uint32_t)total;
+  h->magic = DS_BLOCK_MAGIC;
+  h->state = state;
+  h->marked = 0;
+}
+
+static void ds_account_live(_ds_arena_t_ *a, size_t total) {
+  a->gc_live_allocations++;
+  a->gc_live_bytes += total;
+  if (a->gc_live_bytes > a->gc_peak_live_bytes) a->gc_peak_live_bytes = a->gc_live_bytes;
+}
+
+static void *ds_arena_alloc_block(_ds_arena_t_ *a, size_t payload, const ds_type_descriptor_t *desc, uint8_t state) {
+  size_t total;
+  _ds_arena_chunk_t_ *c;
+  _ds_arena_chunk_t_ *prev_chunk;
   _ds_arena_chunk_t_ *chunk;
-  void *ptr;
+  _ds_block_header_t_ *h;
   size_t scanned = 0;
 
-  if (size < ARENA_ALIGN) size = ARENA_ALIGN;
-  size = ds_arena_align_up(size);
+  if (!a) return NULL;
 
-  /* ---- 1. Try to reuse a recycled block, with a bounded scan ---- */
-  for (c = a->head; c && scanned < DS_FREELIST_SCAN_LIMIT; c = c->next_arena_chunk) {
-    _ds_free_block_t_ *curr = c->free_list_head;
-    _ds_free_block_t_ *prev = NULL;
+  if (payload < ARENA_ALIGN) payload = ARENA_ALIGN;
+  payload = ds_arena_align_up(payload);
+  if (payload > (size_t)0xFFFFFFFFu - sizeof(_ds_block_header_t_)) ds_oom("allocation too large");
+  total = payload + sizeof(_ds_block_header_t_);
+
+  /* ---- 1. Reuse a recycled block, with a bounded scan ----
+   *
+   * Only chunks that actually hold free blocks are visited. Walking the
+   * full chunk list here made allocation O(number of chunks) whenever the
+   * free lists were empty -- the per-cell budget below never advanced, so
+   * it did not bound anything -- which turned a workload that grows many
+   * chunks into a quadratic one. */
+  prev_chunk = NULL;
+  c = a->free_chunks;
+  while (c && scanned < DS_FREELIST_SCAN_LIMIT) {
+    _ds_free_cell_t_ *curr = c->free_list_head;
+    _ds_free_cell_t_ *prev = NULL;
+
+    if (!curr) { /* drained since it was threaded on: unlink lazily */
+      _ds_arena_chunk_t_ *next_c = c->next_free_chunk;
+      c->on_free_ring = 0;
+      c->next_free_chunk = NULL;
+      if (prev_chunk)
+        prev_chunk->next_free_chunk = next_c;
+      else
+        a->free_chunks = next_c;
+      c = next_c;
+      continue;
+    }
 
     while (curr && scanned < DS_FREELIST_SCAN_LIMIT) {
+      _ds_block_header_t_ *ch = ds_block_of(curr);
       scanned++;
-      if (curr->size >= size) {
-        size_t taken = size;
-        ptr = (void *)curr;
 
-        /* Only split when the leftover is big enough to hold a free-list
-         * cell of its own; otherwise hand out the whole block. */
-        if (curr->size >= size + ARENA_ALIGN) {
-          _ds_free_block_t_ *remainder = (_ds_free_block_t_ *)(void *)((char *)ptr + size);
-          remainder->size = curr->size - size;
-          remainder->next = curr->next;
+      if (ch->total_size >= total) {
+        size_t block_total = ch->total_size;
+        _ds_free_cell_t_ *after = curr->next;
+
+        /* Split only when the leftover can stand on its own as a block. */
+        if (block_total >= total + DS_MIN_BLOCK) {
+          _ds_block_header_t_ *rem = (_ds_block_header_t_ *)(void *)((char *)ch + total);
+          _ds_free_cell_t_ *rem_cell;
+          ds_block_init(rem, block_total - total, NULL, DS_BLOCK_FREE);
+          rem_cell = (_ds_free_cell_t_ *)ds_payload_of(rem);
+          rem_cell->next = after;
           if (prev)
-            prev->next = remainder;
+            prev->next = rem_cell;
           else
-            c->free_list_head = remainder;
+            c->free_list_head = rem_cell;
+          a->total_free_bytes_in_list -= total;
         } else {
-          taken = curr->size;
+          total = block_total; /* take the whole block */
           if (prev)
-            prev->next = curr->next;
+            prev->next = after;
           else
-            c->free_list_head = curr->next;
+            c->free_list_head = after;
+          a->total_free_bytes_in_list -= block_total;
         }
 
-        a->total_free_bytes_in_list -= taken;
-        memset(ptr, 0, taken);
+        ds_block_init(ch, total, desc, state);
+        memset(ds_payload_of(ch), 0, total - sizeof(_ds_block_header_t_));
         a->allocs_from_free_list++;
-        return ptr;
+        if (state == DS_BLOCK_MANAGED) ds_account_live(a, total);
+        return ds_payload_of(ch);
       }
       prev = curr;
       curr = curr->next;
     }
+    prev_chunk = c;
+    c = c->next_free_chunk;
   }
 
   /* ---- 2. Bump-pointer path ---- */
   chunk = a->head;
-  if (!chunk || size > chunk->chunk_size - chunk->chunk_size_used) chunk = ds_arena_grow(a, size);
+  if (!chunk || total > chunk->chunk_size - chunk->chunk_size_used) chunk = ds_arena_grow(a, total);
 
-  ptr = (void *)(chunk->payload + chunk->chunk_size_used);
-  chunk->chunk_size_used += size;
-  memset(ptr, 0, size);
+  h = (_ds_block_header_t_ *)(void *)(chunk->payload + chunk->chunk_size_used);
+  chunk->chunk_size_used += total;
+  ds_block_init(h, total, desc, state);
+  memset(ds_payload_of(h), 0, total - sizeof(_ds_block_header_t_));
   a->allocs_from_bump++;
-  return ptr;
+  if (state == DS_BLOCK_MANAGED) ds_account_live(a, total);
+  return ds_payload_of(h);
 }
 
-void *ds_arena_alloc_internal(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_base(a, size); }
-void *ds_arena_alloc_raw(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_base(a, size); }
+void *ds_arena_alloc_internal(_ds_arena_t_ *a, size_t size) {
+  return ds_arena_alloc_block(a, size, NULL, DS_BLOCK_RAW);
+}
+
+void *ds_arena_alloc_raw(_ds_arena_t_ *a, size_t size) { return ds_arena_alloc_block(a, size, NULL, DS_BLOCK_RAW); }
 
 void *ds_arena_alloc(_ds_arena_t_ *a, size_t size, const ds_type_descriptor_t *desc) {
-  void *ptr;
-  if (size < ARENA_ALIGN) size = ARENA_ALIGN;
-  size = ds_arena_align_up(size);
-  ptr = ds_arena_alloc_base(a, size);
-  ds_gc_register_allocation(a, ptr, size, desc);
-  return ptr;
+  return ds_arena_alloc_block(a, size, desc, DS_BLOCK_MANAGED);
 }
 
-/* --- Local O(1) recycling with opportunistic coalescing --- */
+/* ------------------------------------------------------------------ */
+/* Recycling                                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The `size` argument is kept for source compatibility but is no longer
+ * consulted -- the block's own header is authoritative. Requiring every
+ * caller to remember the exact size it had allocated was a standing bug
+ * source: ds_graph_remove_vertex used to pass an element count where a byte
+ * count was needed, handing the allocator a length that was simply wrong.
+ */
 void ds_arena_recycle_raw(_ds_arena_t_ *a, void *dead_ptr, size_t size) {
+  _ds_block_header_t_ *h;
   _ds_arena_chunk_t_ *c;
+  _ds_free_cell_t_ *cell;
 
+  (void)size;
   if (!a || !dead_ptr) return;
 
-  /* Mirror the clamping done by the allocator. A block handed back with a
-   * size below ARENA_ALIGN cannot hold the free-list cell that is about to
-   * be written into it, which corrupted the neighbouring allocation. */
-  if (size < ARENA_ALIGN) size = ARENA_ALIGN;
-  size = ds_arena_align_up(size);
+  h = ds_block_of(dead_ptr);
+  if (h->magic != DS_BLOCK_MAGIC) return; /* not an arena block */
+  if (h->state == DS_BLOCK_FREE) return;  /* already recycled */
 
-  for (c = a->head; c; c = c->next_arena_chunk) {
-    char *chunk_start = c->payload;
-    char *chunk_end = chunk_start + c->chunk_size;
+  c = ds_chunk_owning(a, h);
+  if (!c) return;
 
-    if ((char *)dead_ptr >= chunk_start && (char *)dead_ptr < chunk_end) {
-      _ds_free_block_t_ *new_free;
-
-      /* Never let a bad size argument push the cell past the chunk. */
-      if ((size_t)(chunk_end - (char *)dead_ptr) < size) size = (size_t)(chunk_end - (char *)dead_ptr);
-      if (size < ARENA_ALIGN) return;
-
-      new_free = (_ds_free_block_t_ *)dead_ptr;
-      new_free->size = size;
-      new_free->next = c->free_list_head;
-      c->free_list_head = new_free;
-
-      a->total_free_bytes_in_list += size;
-
-      /* If the block just inserted is physically adjacent to its successor
-       * in the list, splice them together to undo the fragmentation. */
-      if (new_free->next && (char *)new_free + new_free->size == (char *)new_free->next) {
-        new_free->size += new_free->next->size;
-        new_free->next = new_free->next->next;
-      }
-      return;
-    }
+  if (h->state == DS_BLOCK_MANAGED) {
+    a->gc_live_allocations--;
+    a->gc_live_bytes -= h->total_size;
   }
+
+  h->state = DS_BLOCK_FREE;
+  h->descriptor = NULL;
+  h->marked = 0;
+
+  cell = (_ds_free_cell_t_ *)ds_payload_of(h);
+  cell->next = c->free_list_head;
+  c->free_list_head = cell;
+  ds_chunk_mark_free(a, c);
+  a->total_free_bytes_in_list += h->total_size;
 }
 
-void ds_arena_recycle(_ds_arena_t_ *a, void *dead_ptr, size_t size) {
-  if (!a || !dead_ptr) return;
-  ds_gc_unregister_allocation(a, dead_ptr);
-  ds_arena_recycle_raw(a, dead_ptr, size);
-}
+void ds_arena_recycle(_ds_arena_t_ *a, void *dead_ptr, size_t size) { ds_arena_recycle_raw(a, dead_ptr, size); }
+
+/* ------------------------------------------------------------------ */
+/* Teardown and telemetry                                              */
+/* ------------------------------------------------------------------ */
 
 void ds_arena_destroy(_ds_arena_t_ *a) {
   _ds_arena_chunk_t_ *c;
 
   if (!a) return;
-
-  if (a->gc_buckets) {
-    size_t i;
-    for (i = 0; i < a->gc_hash_size; i++) {
-      _ds_allocation_track_t_ *curr_alloc = a->gc_buckets[i];
-      while (curr_alloc) {
-        _ds_allocation_track_t_ *tmp = curr_alloc->next;
-        free(curr_alloc);
-        curr_alloc = tmp;
-      }
-    }
-    free(a->gc_buckets);
-    a->gc_buckets = NULL;
-  }
 
   free(a->gc_mark_stack);
   a->gc_mark_stack = NULL;
@@ -219,10 +275,11 @@ void ds_arena_print_stats(const _ds_arena_t_ *a) {
   total_demands = a->allocs_from_bump + a->allocs_from_free_list;
 
   for (c = a->head; c; c = c->next_arena_chunk) {
-    const _ds_free_block_t_ *fb;
+    const _ds_free_cell_t_ *fc;
     total_arena_bytes += c->chunk_size;
-    for (fb = c->free_list_head; fb; fb = fb->next) {
-      if (fb->size > largest_free_block) largest_free_block = fb->size;
+    for (fc = c->free_list_head; fc; fc = fc->next) {
+      const _ds_block_header_t_ *fh = ((const _ds_block_header_t_ *)fc) - 1;
+      if (fh->total_size > largest_free_block) largest_free_block = fh->total_size;
     }
   }
 

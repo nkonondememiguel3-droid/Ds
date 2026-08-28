@@ -63,32 +63,14 @@ double ds_time_ms(void) { return ((double)clock() * 1000.0) / (double)CLOCKS_PER
 #if DS_ARCH_X86
 
 #if DS_COMPILER_MSVC
+
 #include <intrin.h>
-static void ds_cpuid_count(int regs[4], int leaf, int subleaf) { __cpuidex(regs, leaf, subleaf); }
-static uint64_t ds_xgetbv0(void) { return _xgetbv(0); }
-#else
-#include <cpuid.h>
-static void ds_cpuid_count(int regs[4], int leaf, int subleaf) {
-  unsigned int a = 0, b = 0, c = 0, d = 0;
-  __cpuid_count((unsigned int)leaf, (unsigned int)subleaf, a, b, c, d);
-  regs[0] = (int)a;
-  regs[1] = (int)b;
-  regs[2] = (int)c;
-  regs[3] = (int)d;
-}
-static uint64_t ds_xgetbv0(void) {
-  uint32_t lo = 0, hi = 0;
-  __asm__ __volatile__(".byte 0x0f, 0x01, 0xd0" : "=a"(lo), "=d"(hi) : "c"(0));
-  return ((uint64_t)hi << 32) | lo;
-}
-#endif
 
 int ds_cpu_has_avx2(void) {
   static int cached = -1; /* -1 = not probed yet */
   int regs[4];
-  int max_leaf;
   int osxsave, avx;
-  uint64_t xcr0;
+  unsigned __int64 xcr0;
 
   if (cached >= 0) return cached;
   cached = 0;
@@ -98,27 +80,62 @@ int ds_cpu_has_avx2(void) {
    * the fallback in a test run on a machine that does have AVX2. */
   if (getenv("DS_NO_AVX2") != NULL) return cached;
 
-  ds_cpuid_count(regs, 0, 0);
-  max_leaf = regs[0];
-  if (max_leaf < 7) return cached;
+  __cpuid(regs, 0);
+  if (regs[0] < 7) return cached;
 
   /* Leaf 1: ECX bit 27 = OSXSAVE, ECX bit 28 = AVX */
-  ds_cpuid_count(regs, 1, 0);
+  __cpuidex(regs, 1, 0);
   osxsave = (regs[2] & (1 << 27)) != 0;
   avx = (regs[2] & (1 << 28)) != 0;
   if (!osxsave || !avx) return cached;
 
   /* The OS must actually be saving XMM (bit 1) and YMM (bit 2) state,
    * otherwise using AVX registers silently corrupts them across a context
-   * switch. This is the check the original code was missing entirely. */
-  xcr0 = ds_xgetbv0();
+   * switch. */
+  xcr0 = _xgetbv(0);
   if ((xcr0 & 0x6u) != 0x6u) return cached;
 
   /* Leaf 7, subleaf 0: EBX bit 5 = AVX2 */
-  ds_cpuid_count(regs, 7, 0);
+  __cpuidex(regs, 7, 0);
   cached = (regs[1] & (1 << 5)) != 0;
   return cached;
 }
+
+#else /* GCC, Clang, MinGW-w64 */
+
+/*
+ * GCC and Clang already implement this entire probe -- the CPUID leaves,
+ * the OSXSAVE bit and the XGETBV check for YMM state -- inside
+ * __builtin_cpu_supports, so we let them do it.
+ *
+ * The previous version hand-rolled the CPUID sequence with __cpuid_count
+ * and a small block of inline asm. Clang compiled it into
+ *
+ *     mov  $0x7, %eax
+ *     xchg %rax, %rbx     ; stash RBX in RAX
+ *     cpuid               ; ...but CPUID overwrites RAX as well as RBX
+ *     xchg %rax, %rbx     ; so this restores RBX from CPUID's EAX output
+ *
+ * which both queried a garbage leaf and destroyed RBX -- a callee-saved
+ * register. Any caller holding a live value there got it back corrupted;
+ * ds_str_find kept its `src` argument in RBX and segfaulted on return.
+ * Nothing about the C was wrong, which is exactly why hand-written CPUID
+ * asm is worth avoiding when the compiler ships a correct version.
+ */
+int ds_cpu_has_avx2(void) {
+  static int cached = -1; /* -1 = not probed yet */
+
+  if (cached >= 0) return cached;
+  cached = 0;
+
+  if (getenv("DS_NO_AVX2") != NULL) return cached;
+
+  __builtin_cpu_init();
+  cached = __builtin_cpu_supports("avx2") ? 1 : 0;
+  return cached;
+}
+
+#endif /* DS_COMPILER_MSVC */
 
 #else /* non-x86: ARM, RISC-V, ... */
 

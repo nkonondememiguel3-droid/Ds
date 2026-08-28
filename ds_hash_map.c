@@ -45,16 +45,14 @@ const ds_type_descriptor_t ds_map_entry_descriptor = {ds_map_entry_mark, NULL};
 /* Hashing                                                             */
 /* ------------------------------------------------------------------ */
 
-/* DJB2. Computed on the full key, folded into the bucket count separately,
- * so a resize does not have to re-walk the key bytes. */
+/* DJB2 over the whole key. The value is cached in the entry, so the bucket
+ * index is derived from it rather than recomputed. */
 static size_t ds_hash_bytes(const ds_string_t *str) {
   size_t hash = 5381;
   size_t i;
   for (i = 0; i < str->length; i++) hash = ((hash << 5) + hash) + (unsigned char)str->data[i];
   return hash;
 }
-
-static size_t ds_hash(const ds_string_t *str, size_t bucket_count) { return ds_hash_bytes(str) % bucket_count; }
 
 /* ------------------------------------------------------------------ */
 /* API                                                                 */
@@ -81,31 +79,33 @@ ds_hash_map_t *ds_map_new(_ds_arena_t_ *a, size_t initial_buckets) {
 }
 
 ds_node_t ds_map_get(const ds_hash_map_t *map, const ds_string_t *key) {
-  size_t index;
+  size_t h, index;
   const _ds_hash_entry_t_ *curr;
 
   if (!map || !map->buckets || !key) return ds_make_nil();
 
-  index = ds_hash(key, map->bucket_count);
+  h = ds_hash_bytes(key);
+  index = h % map->bucket_count;
   for (curr = map->buckets[index]; curr; curr = curr->next) {
-    if (ds_str_equal(curr->key, key)) return curr->value;
+    if (curr->hash == h && ds_str_equal(curr->key, key)) return curr->value;
   }
 
   return ds_make_nil();
 }
 
 bool ds_map_remove(_ds_arena_t_ *a, ds_hash_map_t *map, const ds_string_t *key) {
-  size_t index;
+  size_t h, index;
   _ds_hash_entry_t_ **curr;
 
   if (!a || !map || !map->buckets || !key) return false;
 
-  index = ds_hash(key, map->bucket_count);
+  h = ds_hash_bytes(key);
+  index = h % map->bucket_count;
   curr = &map->buckets[index];
 
   while (*curr) {
     _ds_hash_entry_t_ *entry = *curr;
-    if (ds_str_equal(entry->key, key)) {
+    if (entry->hash == h && ds_str_equal(entry->key, key)) {
       *curr = entry->next;
       entry->next = NULL;
       ds_arena_recycle(a, entry, sizeof(_ds_hash_entry_t_));
@@ -137,7 +137,7 @@ void ds_map_resize(_ds_arena_t_ *a, ds_hash_map_t *map, size_t new_bucket_count)
     _ds_hash_entry_t_ *curr = old_buckets[i];
     while (curr) {
       _ds_hash_entry_t_ *next_node = curr->next;
-      size_t new_index = ds_hash(curr->key, new_bucket_count);
+      size_t new_index = curr->hash % new_bucket_count; /* no re-walk of the key */
 
       curr->next = new_buckets[new_index];
       new_buckets[new_index] = curr;
@@ -156,7 +156,7 @@ void ds_map_resize(_ds_arena_t_ *a, ds_hash_map_t *map, size_t new_bucket_count)
 }
 
 void ds_map_put(_ds_arena_t_ *a, ds_hash_map_t *map, ds_string_t *key, ds_node_t value) {
-  size_t index;
+  size_t h, index;
   _ds_hash_entry_t_ *curr;
   _ds_hash_entry_t_ *entry;
 
@@ -164,10 +164,11 @@ void ds_map_put(_ds_arena_t_ *a, ds_hash_map_t *map, ds_string_t *key, ds_node_t
 
   if ((double)map->size > 0.75 * (double)map->bucket_count) ds_map_resize(a, map, map->bucket_count * 2);
 
-  index = ds_hash(key, map->bucket_count);
+  h = ds_hash_bytes(key);
+  index = h % map->bucket_count;
 
   for (curr = map->buckets[index]; curr; curr = curr->next) {
-    if (ds_str_equal(curr->key, key)) {
+    if (curr->hash == h && ds_str_equal(curr->key, key)) {
       curr->value = value;
       return;
     }
@@ -176,6 +177,7 @@ void ds_map_put(_ds_arena_t_ *a, ds_hash_map_t *map, ds_string_t *key, ds_node_t
   entry = (_ds_hash_entry_t_ *)ds_arena_alloc(a, sizeof(_ds_hash_entry_t_), &ds_map_entry_descriptor);
   entry->key = key;
   entry->value = value;
+  entry->hash = h;
 
   entry->next = map->buckets[index];
   map->buckets[index] = entry;

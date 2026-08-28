@@ -7,22 +7,14 @@
 #include "ds_arena.h"
 
 /*
- * Fibonacci/murmur-style pointer mixing.
+ * Mark and sweep over inline block headers.
  *
- * The original mixed in uintptr_t and shifted right by 33, which is
- * undefined behaviour on any 32-bit target (a shift count >= the width of
- * the type). Mixing in a fixed uint64_t makes the function well defined and
- * gives the same distribution on both word sizes.
+ * There is no side table: every block the arena hands out carries its own
+ * descriptor, size and mark bit in the ARENA_ALIGN bytes immediately before
+ * the payload, and every byte of a chunk's used region belongs to exactly
+ * one block. Marking is therefore a pointer subtraction, and sweeping is a
+ * linear walk of each chunk in address order.
  */
-static DS_INLINE size_t ds_ptr_hash(const void *ptr, size_t hash_size) {
-  uint64_t x = (uint64_t)(uintptr_t)ptr;
-  x ^= x >> 33;
-  x *= UINT64_C(0xff51afd7ed558ccd);
-  x ^= x >> 33;
-  x *= UINT64_C(0xc4ceb9fe1a85ec53);
-  x ^= x >> 33;
-  return (size_t)(x & (uint64_t)(hash_size - 1));
-}
 
 void ds_gc_push_mark_stack_context(_ds_arena_t_ *a, ds_node_t node) {
   ds_type_t type;
@@ -49,31 +41,9 @@ void ds_gc_push_mark_stack_context(_ds_arena_t_ *a, ds_node_t node) {
   a->gc_mark_stack[a->gc_mark_stack_top++] = node;
 }
 
-static void ds_gc_check_rehash(_ds_arena_t_ *a) {
-  size_t old_size, new_size, i;
-  _ds_allocation_track_t_ **new_buckets;
-
-  if ((double)a->gc_live_allocations <= 0.75 * (double)a->gc_hash_size) return;
-
-  old_size = a->gc_hash_size;
-  new_size = old_size * 2;
-  new_buckets = (_ds_allocation_track_t_ **)calloc(new_size, sizeof(_ds_allocation_track_t_ *));
-  if (!new_buckets) return; /* stay at the current size rather than die */
-
-  for (i = 0; i < old_size; i++) {
-    _ds_allocation_track_t_ *curr = a->gc_buckets[i];
-    while (curr) {
-      _ds_allocation_track_t_ *next_node = curr->next;
-      size_t new_bucket = ds_ptr_hash(curr->ptr, new_size);
-      curr->next = new_buckets[new_bucket];
-      new_buckets[new_bucket] = curr;
-      curr = next_node;
-    }
-  }
-  free(a->gc_buckets);
-  a->gc_buckets = new_buckets;
-  a->gc_hash_size = new_size;
-}
+/* ------------------------------------------------------------------ */
+/* Roots                                                               */
+/* ------------------------------------------------------------------ */
 
 void ds_gc_register_root(_ds_arena_t_ *a, ds_node_t *var_ptr) {
   _ds_gc_root_t_ *r;
@@ -99,80 +69,119 @@ void ds_gc_unregister_root(_ds_arena_t_ *a, ds_node_t *var_ptr) {
   }
 }
 
-void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size, const ds_type_descriptor_t *desc) {
-  size_t bucket;
-  _ds_allocation_track_t_ *track;
+/* ------------------------------------------------------------------ */
+/* Registration                                                        */
+/* ------------------------------------------------------------------ */
 
+/*
+ * ds_arena_alloc now stamps the header itself, so these two only exist to
+ * let a caller move a block between the traced and untraced states after
+ * the fact. Both are O(1) with no allocation of their own.
+ */
+
+void ds_gc_register_allocation(_ds_arena_t_ *a, void *ptr, size_t size, const ds_type_descriptor_t *desc) {
+  _ds_block_header_t_ *h;
+
+  (void)size; /* the header is authoritative */
   if (!a || !ptr) return;
 
-  ds_gc_check_rehash(a);
-  bucket = ds_ptr_hash(ptr, a->gc_hash_size);
+  h = ds_block_of(ptr);
+  if (h->magic != DS_BLOCK_MAGIC || h->state == DS_BLOCK_MANAGED) return;
 
-  track = (_ds_allocation_track_t_ *)malloc(sizeof(_ds_allocation_track_t_));
-  if (!track) {
-    fputs("ds: out of memory (gc tracking record)\n", stderr);
-    abort();
-  }
-
-  track->ptr = ptr;
-  track->size = size;
-  track->marked = 0;
-  track->descriptor = desc;
-
-  track->next = a->gc_buckets[bucket];
-  a->gc_buckets[bucket] = track;
+  h->state = DS_BLOCK_MANAGED;
+  h->descriptor = desc;
+  h->marked = 0;
   a->gc_live_allocations++;
-  a->gc_live_bytes += size;
+  a->gc_live_bytes += h->total_size;
   if (a->gc_live_bytes > a->gc_peak_live_bytes) a->gc_peak_live_bytes = a->gc_live_bytes;
 }
 
 void ds_gc_unregister_allocation(_ds_arena_t_ *a, void *ptr) {
-  size_t bucket;
-  _ds_allocation_track_t_ **curr;
+  _ds_block_header_t_ *h;
 
-  if (!a || !ptr || !a->gc_buckets) return;
+  if (!a || !ptr) return;
 
-  bucket = ds_ptr_hash(ptr, a->gc_hash_size);
-  curr = &a->gc_buckets[bucket];
-  while (*curr) {
-    _ds_allocation_track_t_ *track = *curr;
-    if (track->ptr == ptr) {
-      *curr = track->next;
-      a->gc_live_allocations--;
-      a->gc_live_bytes -= track->size;
-      free(track);
-      return;
-    }
-    curr = &track->next;
-  }
+  h = ds_block_of(ptr);
+  if (h->magic != DS_BLOCK_MAGIC || h->state != DS_BLOCK_MANAGED) return;
+
+  h->state = DS_BLOCK_RAW;
+  h->descriptor = NULL;
+  h->marked = 0;
+  a->gc_live_allocations--;
+  a->gc_live_bytes -= h->total_size;
 }
 
-static _ds_allocation_track_t_ *ds_gc_lookup(_ds_arena_t_ *a, const void *ptr) {
-  _ds_allocation_track_t_ *track = a->gc_buckets[ds_ptr_hash(ptr, a->gc_hash_size)];
-  while (track) {
-    if (track->ptr == ptr) return track;
-    track = track->next;
+/* ------------------------------------------------------------------ */
+/* Collection                                                          */
+/* ------------------------------------------------------------------ */
+
+static void ds_gc_sweep_chunk(_ds_arena_t_ *a, _ds_arena_chunk_t_ *c) {
+  char *p = c->payload;
+  char *end = c->payload + c->chunk_size_used;
+  _ds_block_header_t_ *run = NULL; /* open run of adjacent free blocks */
+
+  /* The free list is rebuilt from scratch by this walk, which is what lets
+   * adjacent dead blocks be merged: the walk visits blocks in address
+   * order, so neighbours are consecutive iterations. The previous
+   * head-insert scheme only ever merged a block with whatever happened to
+   * be at the head of the list, and the sweep visited objects in pointer-
+   * hash order, so in practice it merged almost nothing. */
+  c->free_list_head = NULL;
+
+  while (p < end) {
+    _ds_block_header_t_ *h = (_ds_block_header_t_ *)(void *)p;
+    size_t step = h->total_size;
+
+    if (step < DS_MIN_BLOCK || p + step > end) {
+      /* A corrupted header would desynchronise the walk; stop rather than
+       * run off the end of the chunk. */
+      fputs("ds: arena corruption detected during sweep\n", stderr);
+      abort();
+    }
+
+    if (h->state == DS_BLOCK_MANAGED) {
+      if (h->marked) {
+        h->marked = 0;
+      } else {
+        const ds_type_descriptor_t *desc = h->descriptor;
+        void *payload = ds_payload_of(h);
+
+        a->gc_live_allocations--;
+        a->gc_live_bytes -= h->total_size;
+        h->state = DS_BLOCK_FREE;
+        h->descriptor = NULL;
+
+        /* The block is already out of the live accounting before the
+         * finalizer runs, so a finalizer that touches the arena cannot
+         * observe a half-dead object. */
+        if (desc && desc->finalize) desc->finalize(payload, a);
+      }
+    }
+
+    if (h->state == DS_BLOCK_FREE) {
+      if (run && (char *)run + run->total_size == p) {
+        run->total_size += h->total_size; /* absorb into the open run */
+      } else {
+        _ds_free_cell_t_ *cell = (_ds_free_cell_t_ *)ds_payload_of(h);
+        cell->next = c->free_list_head;
+        c->free_list_head = cell;
+        run = h;
+      }
+    } else {
+      run = NULL;
+    }
+
+    p += step;
   }
-  return NULL;
 }
 
 void ds_arena_run_gc(_ds_arena_t_ *a) {
   _ds_gc_root_t_ *root;
-  size_t i;
+  _ds_arena_chunk_t_ *c;
 
-  /* The null check has to come before the arena is touched. The original
-   * walked and printed the root list first and only then tested `a`. */
-  if (!a || !a->gc_buckets) return;
+  if (!a) return;
 
   a->gc_mark_stack_top = 0;
-  if (!a->gc_mark_stack) {
-    a->gc_mark_stack_cap = 1024;
-    a->gc_mark_stack = (ds_node_t *)malloc(sizeof(ds_node_t) * a->gc_mark_stack_cap);
-    if (!a->gc_mark_stack) {
-      fputs("ds: out of memory (gc mark stack)\n", stderr);
-      abort();
-    }
-  }
 
   /* ---- 1. Seed the work list from the registered roots ---- */
   for (root = a->gc_roots; root; root = root->next) {
@@ -183,44 +192,36 @@ void ds_arena_run_gc(_ds_arena_t_ *a) {
   while (a->gc_mark_stack_top > 0) {
     ds_node_t node = a->gc_mark_stack[--a->gc_mark_stack_top];
     void *ptr = ds_get_ptr(node);
-    _ds_allocation_track_t_ *track;
+    _ds_block_header_t_ *h;
 
     if (!ptr) continue;
 
-    track = ds_gc_lookup(a, ptr);
-    if (!track) continue;        /* untracked (raw) memory: nothing to mark */
-    if (track->marked) continue; /* already visited -- this is what breaks cycles */
-    track->marked = 1;
+    h = ds_block_of(ptr);
+    if (h->magic != DS_BLOCK_MAGIC) continue;   /* not an arena block */
+    if (h->state != DS_BLOCK_MANAGED) continue; /* raw payload: nothing to trace */
+    if (h->marked) continue;                    /* this is what breaks cycles */
+    h->marked = 1;
 
-    if (track->descriptor && track->descriptor->mark) track->descriptor->mark(node, a);
+    if (h->descriptor && h->descriptor->mark) h->descriptor->mark(node, a);
   }
 
-  /* ---- 3. Sweep ---- */
-  for (i = 0; i < a->gc_hash_size; i++) {
-    _ds_allocation_track_t_ **curr = &a->gc_buckets[i];
-    while (*curr) {
-      _ds_allocation_track_t_ *track = *curr;
-      if (!track->marked) {
-        _ds_allocation_track_t_ *next_track = track->next;
-        void *dead = track->ptr;
-        size_t dead_size = track->size;
-        const ds_type_descriptor_t *desc = track->descriptor;
+  /* ---- 3. Sweep, chunk by chunk, in address order ---- */
+  a->total_free_bytes_in_list = 0;
+  a->free_chunks = NULL;
+  for (c = a->head; c; c = c->next_arena_chunk) {
+    const _ds_free_cell_t_ *fc;
 
-        /* Unlink and account for the record *before* running the finalizer:
-         * a finalizer is allowed to touch the arena (it typically recycles
-         * the object's raw payload buffer) and must not be able to observe
-         * or re-enter a half-removed tracking record. */
-        *curr = next_track;
-        a->gc_live_allocations--;
-        a->gc_live_bytes -= dead_size;
-        free(track);
+    c->on_free_ring = 0;
+    c->next_free_chunk = NULL;
+    ds_gc_sweep_chunk(a, c);
 
-        if (desc && desc->finalize) desc->finalize(dead, a);
-        ds_arena_recycle_raw(a, dead, dead_size);
-      } else {
-        track->marked = 0;
-        curr = &track->next;
-      }
+    for (fc = c->free_list_head; fc; fc = fc->next) {
+      a->total_free_bytes_in_list += (((const _ds_block_header_t_ *)fc) - 1)->total_size;
+    }
+    if (c->free_list_head) {
+      c->on_free_ring = 1;
+      c->next_free_chunk = a->free_chunks;
+      a->free_chunks = c;
     }
   }
 }

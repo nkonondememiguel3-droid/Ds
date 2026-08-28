@@ -9,8 +9,6 @@
 #include "ds_platform.h"
 
 #define ARENA_ALIGN 16
-#define GC_HASH_SIZE 1024
-
 /* How many free-list cells a single allocation is willing to walk before it
  * gives up and takes the bump-pointer path. Without a bound, allocation
  * degrades to O(number of free blocks) and the whole arena goes quadratic
@@ -23,7 +21,6 @@
 #define DS_STATIC_ASSERT(cond, msg) typedef char ds_static_assert_##__LINE__[(cond) ? 1 : -1]
 #endif
 
-DS_STATIC_ASSERT((GC_HASH_SIZE & (GC_HASH_SIZE - 1)) == 0, "GC_HASH_SIZE must be a power of two");
 DS_STATIC_ASSERT((ARENA_ALIGN & (ARENA_ALIGN - 1)) == 0, "ARENA_ALIGN must be a power of two");
 DS_STATIC_ASSERT(ARENA_ALIGN >= 16, "ARENA_ALIGN must leave 4 low bits free for pointer tags");
 
@@ -88,15 +85,6 @@ static DS_INLINE bool ds_unpack_bool(ds_node_t node) { return ((node >> 4) & 1u)
 
 static DS_INLINE ds_node_t ds_make_nil(void) { return (ds_node_t)TYPE_NIL; }
 
-/* Free-list cell. Overlaid on the dead block itself, so every recycled block
- * must be at least this large -- see the static assert below. */
-typedef struct _ds_free_block_ {
-  size_t size;
-  struct _ds_free_block_ *next;
-} _ds_free_block_t_;
-
-DS_STATIC_ASSERT(sizeof(_ds_free_block_t_) <= ARENA_ALIGN, "a recycled block must be able to hold a free-list cell");
-
 typedef struct _ds_arena_chunk_t_ _ds_arena_chunk_t_;
 typedef struct __ds_arena__ _ds_arena_t_;
 
@@ -105,13 +93,65 @@ typedef struct {
   void (*finalize)(void *ptr, _ds_arena_t_ *a);
 } ds_type_descriptor_t;
 
-typedef struct _ds_allocation_track_ {
-  void *ptr;
-  size_t size;
+/*
+ * ------------------------------------------------------------------
+ * Block header
+ * ------------------------------------------------------------------
+ *
+ * Every block the arena hands out -- managed or raw -- is preceded by one
+ * of these, and every byte of a chunk's used region is covered by exactly
+ * one block. That single invariant replaces the side hash table the
+ * collector used to keep:
+ *
+ *   - registering a managed object is three field writes into a cache line
+ *     the allocator just touched, instead of malloc() + pointer hash +
+ *     bucket insert;
+ *   - marking is a pointer subtraction instead of a hash and a chain walk;
+ *   - sweeping is a linear walk of each chunk in address order, which also
+ *     makes coalescing adjacent dead blocks fall out for free.
+ *
+ * The header is exactly ARENA_ALIGN bytes, so a 16-byte-aligned block start
+ * still yields a 16-byte-aligned payload and the four low tag bits stay
+ * free.
+ */
+
+#define DS_BLOCK_MAGIC ((uint16_t)0xD5A1)
+
+enum {
+  DS_BLOCK_FREE = 0,   /* on a chunk free list */
+  DS_BLOCK_RAW = 1,    /* live, untracked by the collector */
+  DS_BLOCK_MANAGED = 2 /* live, traced and swept */
+};
+
+typedef struct _ds_block_header_ {
+  const ds_type_descriptor_t *descriptor; /* NULL for raw, or a leaf managed object */
+  uint32_t total_size;                    /* header + payload, always ARENA_ALIGN-aligned */
+  uint16_t magic;
+  uint8_t state;
   uint8_t marked;
-  const ds_type_descriptor_t *descriptor;
-  struct _ds_allocation_track_ *next;
-} _ds_allocation_track_t_;
+#if UINTPTR_MAX <= 0xFFFFFFFFu
+  uint32_t reserved_; /* pad the ILP32 layout back up to ARENA_ALIGN */
+#endif
+} _ds_block_header_t_;
+
+DS_STATIC_ASSERT(sizeof(_ds_block_header_t_) == ARENA_ALIGN,
+                 "the block header must be exactly ARENA_ALIGN so payloads stay taggable");
+
+/* Free-list link, written into the payload area of a dead block. The block's
+ * size lives in its header, so the cell itself is a single pointer. */
+typedef struct _ds_free_cell_ {
+  struct _ds_free_cell_ *next;
+} _ds_free_cell_t_;
+
+DS_STATIC_ASSERT(sizeof(_ds_free_cell_t_) <= ARENA_ALIGN, "a recycled block must be able to hold a free-list cell");
+
+/* Smallest block the allocator will ever produce: header plus one aligned
+ * payload granule, which is also the smallest block that can hold a cell. */
+#define DS_MIN_BLOCK (sizeof(_ds_block_header_t_) + ARENA_ALIGN)
+
+static DS_INLINE _ds_block_header_t_ *ds_block_of(void *payload) { return ((_ds_block_header_t_ *)payload) - 1; }
+
+static DS_INLINE void *ds_payload_of(_ds_block_header_t_ *h) { return (void *)(h + 1); }
 
 typedef struct _ds_gc_root_ {
   ds_node_t *variable_pointer;
@@ -121,9 +161,13 @@ typedef struct _ds_gc_root_ {
 /* --- Chunk with a chunk-local free list (no cross-chunk leakage) --- */
 struct _ds_arena_chunk_t_ {
   struct _ds_arena_chunk_t_ *next_arena_chunk;
+  /* Chunks holding at least one free block are threaded onto a second list
+   * so the allocator never walks chunks that have nothing to offer. */
+  struct _ds_arena_chunk_t_ *next_free_chunk;
+  uint8_t on_free_ring;
   size_t chunk_size;
   size_t chunk_size_used;
-  _ds_free_block_t_ *free_list_head;
+  _ds_free_cell_t_ *free_list_head;
   /* Payload base, aligned up to ARENA_ALIGN. Storing it explicitly is what
    * guarantees the 16-byte invariant the whole tagging scheme depends on;
    * the old code used (chunk + 1), which lands on a 40-byte offset on LP64
@@ -133,10 +177,9 @@ struct _ds_arena_chunk_t_ {
 
 struct __ds_arena__ {
   _ds_arena_chunk_t_ *head;
+  _ds_arena_chunk_t_ *free_chunks; /* chunks with a non-empty free list */
   size_t chunk_size;
 
-  _ds_allocation_track_t_ **gc_buckets;
-  size_t gc_hash_size;
   _ds_gc_root_t_ *gc_roots;
 
   ds_node_t *gc_mark_stack;

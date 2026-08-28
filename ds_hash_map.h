@@ -12,6 +12,12 @@ extern "C" {
 typedef struct _ds_hash_entry_ {
   ds_string_t *key;
   ds_node_t value;
+  /* DJB2 of the key, cached at insert. A resize then only has to take it
+   * modulo the new bucket count, instead of walking every key's bytes
+   * again -- which was 25% of insert time on a map that grows from 4 to
+   * 16384 buckets. It also lets lookups reject a mismatch without calling
+   * ds_str_equal at all. */
+  size_t hash;
   struct _ds_hash_entry_ *next;
 } _ds_hash_entry_t_;
 
