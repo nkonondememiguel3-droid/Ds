@@ -140,13 +140,31 @@ endif()
 # --------------------------------------------------------------------
 # Install
 # --------------------------------------------------------------------
-install(TARGETS ${PROJECT_NAME} ds_arena
-        ARCHIVE DESTINATION lib)
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ DESTINATION include
-        FILES_MATCHING PATTERN "*.h"
-        PATTERN "build" EXCLUDE
-        PATTERN "tests" EXCLUDE
-        PATTERN "memory" EXCLUDE
-        PATTERN ".git" EXCLUDE)
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/memory/include/ DESTINATION include
-        FILES_MATCHING PATTERN "*.h")
+# The public headers are listed explicitly rather than globbed. A
+# glob over the source root makes CMake walk the whole tree at install
+# time -- including the generator's own build directory, which holds
+# thousands of files under MSVC -- and, because the install prefix
+# usually sits inside the source tree, a second run starts rediscovering
+# its own output. An explicit list is instant and deterministic.
+set(DS_PUBLIC_HEADERS
+    ds_dyn_array.h
+    ds_string.h
+    ds_graph.h
+    ds_hash_map.h
+    ds_linked_list.h
+    ds_stack_queue.h
+    ds_priority_queue.h
+)
+
+set(DS_MEMORY_HEADERS
+    memory/include/common.h
+    memory/include/ds_platform.h
+    memory/include/ds_arena.h
+    memory/include/gc.h
+)
+
+install(TARGETS ${PROJECT_NAME} ds_arena ARCHIVE DESTINATION lib)
+
+# Flattened into one directory: the headers include each other by bare
+# name, so a consumer needs them all on a single include path.
+install(FILES ${DS_PUBLIC_HEADERS} ${DS_MEMORY_HEADERS} DESTINATION include)

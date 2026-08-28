@@ -137,7 +137,7 @@ static void bench_format(void) {
     ds_bench_stop();
     ds_arena_destroy(a);
   }
-  ds_bench_report("ds_str_format (two vsnprintf passes)", 50000);
+  ds_bench_report("ds_str_format (stack-buffer fast path)", 50000);
 }
 
 int main(void) {

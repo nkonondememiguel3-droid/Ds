@@ -165,6 +165,26 @@ static void test_transforms(void) {
   CHECK(strcmp(r->data, "k=7/2.5") == 0, "format renders");
   CHECK(ds_str_format(a, "")->length == 0, "an empty format yields an empty string");
 
+  /* ds_str_format renders into a 256-byte stack buffer when the result
+   * fits and re-renders into an exact allocation when it does not. Both
+   * paths have to agree, so walk the boundary. */
+  {
+    char pattern[600];
+    int n, ok = 1;
+    memset(pattern, 'P', sizeof(pattern));
+    for (n = 250; n <= 262; n++) {
+      ds_string_t *f = ds_str_format(a, "%.*s", n, pattern);
+      if (!f || f->length != (size_t)n || f->data[n] != '\0') ok = 0;
+      if (f && memcmp(f->data, pattern, (size_t)n) != 0) ok = 0;
+    }
+    CHECK(ok, "format is correct on both sides of the stack-buffer boundary");
+
+    {
+      ds_string_t *big = ds_str_format(a, "%.*s", 550, pattern);
+      CHECK(big && big->length == 550 && big->data[550] == '\0', "format handles output far past the stack buffer");
+    }
+  }
+
   ds_arena_destroy(a);
 }
 

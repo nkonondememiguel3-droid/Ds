@@ -141,7 +141,33 @@ static ptrdiff_t ds_str_find_scalar(const char *h, size_t h_len, const char *n, 
   return -1;
 }
 
-#if DS_HAVE_AVX2_INTRINSICS
+/*
+ * Whether the AVX2 kernel is worth using depends on the C library, not just
+ * on the CPU. The scalar path is driven by memchr, and glibc ships a
+ * hand-tuned AVX2/EVEX memchr that scans 64 bytes per iteration; measured
+ * on a 64 KiB haystack it beats this kernel roughly 6 to 1 (794 ns against
+ * 4340 ns). The Microsoft UCRT's memchr is not in that class, and on the
+ * same benchmark the kernel wins by about 19% (1948 ns against 2320 ns).
+ *
+ * So the question the dispatch actually needs to answer is not "does this
+ * CPU support AVX2" but "is this libc's memchr better than our loop". The
+ * CPU probe still gates correctness -- without it the intrinsics fault on a
+ * pre-Haswell part -- and this guard picks the faster of two paths that
+ * produce identical results either way.
+ */
+#if defined(DS_FORCE_AVX2_KERNEL)
+/* Build the kernel even where the libc path would be preferred, so a
+ * glibc-based CI still compiles and exercises it. Without this the kernel
+ * is dead code on Linux and rots unnoticed until someone builds for
+ * Windows. */
+#define DS_PREFER_LIBC_MEMCHR 0
+#elif defined(__GLIBC__)
+#define DS_PREFER_LIBC_MEMCHR 1
+#else
+#define DS_PREFER_LIBC_MEMCHR 0
+#endif
+
+#if DS_HAVE_AVX2_INTRINSICS && !DS_PREFER_LIBC_MEMCHR
 /*
  * AVX2 kernel: broadcast the needle's first byte across a 256-bit register,
  * compare 32 haystack bytes at a time, and only fall back to memcmp on the
@@ -185,14 +211,14 @@ DS_TARGET_AVX2 static ptrdiff_t ds_str_find_avx2(const char *h, size_t h_len, co
     return (tail < 0) ? -1 : (ptrdiff_t)i + tail;
   }
 }
-#endif /* DS_HAVE_AVX2_INTRINSICS */
+#endif /* AVX2 kernel */
 
 ptrdiff_t ds_str_find(const ds_string_t *src, const ds_string_t *sub) {
   if (!src || !sub || !src->data || !sub->data) return -1;
   if (sub->length == 0) return 0;
   if (sub->length > src->length) return -1;
 
-#if DS_HAVE_AVX2_INTRINSICS
+#if DS_HAVE_AVX2_INTRINSICS && !DS_PREFER_LIBC_MEMCHR
   /* 32 bytes is the break-even point; below it the scalar path wins, and
    * the runtime probe keeps this from executing an illegal instruction on
    * a pre-Haswell CPU (the original called AVX2 unconditionally). */
@@ -289,7 +315,14 @@ ds_string_t *ds_str_join(_ds_arena_t_ *a, ds_string_t **arr, const ds_string_t *
 /* Formatting / trimming / replacement                                 */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Rendering size for the fast path. Anything that fits is formatted once;
+ * longer output falls back to measure-then-render.
+ */
+#define DS_FORMAT_STACK_BUF 256
+
 ds_string_t *ds_str_format(_ds_arena_t_ *a, const char *format, ...) {
+  char stack_buf[DS_FORMAT_STACK_BUF];
   va_list args1, args2;
   int len;
   ds_string_t *res;
@@ -299,7 +332,15 @@ ds_string_t *ds_str_format(_ds_arena_t_ *a, const char *format, ...) {
   va_start(args1, format);
   va_copy(args2, args1);
 
-  len = vsnprintf(NULL, 0, format, args1);
+  /* Render straight into a stack buffer. vsnprintf returns the length it
+   * would have needed, so one call both formats the string and measures it
+   * whenever the result fits.
+   *
+   * The previous version always made two passes, the first with a NULL
+   * destination purely to measure. That is cheap on glibc but expensive in
+   * the Microsoft UCRT, where it was the single slowest operation in the
+   * string benchmark at ~780 ns per call. */
+  len = vsnprintf(stack_buf, sizeof(stack_buf), format, args1);
   va_end(args1);
 
   if (len < 0) {
@@ -307,6 +348,12 @@ ds_string_t *ds_str_format(_ds_arena_t_ *a, const char *format, ...) {
     return NULL;
   }
 
+  if ((size_t)len < sizeof(stack_buf)) {
+    va_end(args2);
+    return ds_str_new_len(a, stack_buf, (size_t)len);
+  }
+
+  /* Too long for the fast path: allocate exactly and render again. */
   res = ds_str_new_len(a, NULL, (size_t)len);
   if (!res) {
     va_end(args2);
