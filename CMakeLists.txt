@@ -189,3 +189,23 @@ install(TARGETS ${PROJECT_NAME} ds_arena ARCHIVE DESTINATION lib)
 # Flattened into one directory: the headers include each other by bare
 # name, so a consumer needs them all on a single include path.
 install(FILES ${DS_PUBLIC_HEADERS} ${DS_MEMORY_HEADERS} DESTINATION include)
+
+# --------------------------------------------------------------------
+# Uninstall
+# --------------------------------------------------------------------
+# CMake generates no uninstall rule of its own. This drives one from the
+# install_manifest.txt that CMake writes into the build tree at install
+# time, so it removes exactly what was installed and nothing else.
+#
+#   sudo cmake --build build --target uninstall
+#   (or, from inside build/:  sudo make uninstall)
+if(NOT TARGET uninstall)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+        IMMEDIATE @ONLY)
+
+    add_custom_target(uninstall
+        COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+        COMMENT "Removing every file listed in install_manifest.txt")
+endif()

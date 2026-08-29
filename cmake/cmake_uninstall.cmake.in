@@ -1,0 +1,65 @@
+# Removes exactly the files that `cmake --install` (or `make install`) wrote,
+# using the manifest CMake records in the build directory at install time.
+#
+# Configured into the build tree as cmake_uninstall.cmake and driven by the
+# `uninstall` target.
+
+set(MANIFEST "@CMAKE_CURRENT_BINARY_DIR@/install_manifest.txt")
+
+if(NOT EXISTS "${MANIFEST}")
+    message(FATAL_ERROR
+        "No install manifest at:\n"
+        "  ${MANIFEST}\n"
+        "\n"
+        "CMake writes that file when it installs, so this means nothing was "
+        "installed from this build directory -- or the build directory was "
+        "deleted afterwards, which takes the manifest with it.\n"
+        "\n"
+        "If the build tree is gone, remove the files by hand. A default "
+        "install puts them here:\n"
+        "  <prefix>/lib/libds.a\n"
+        "  <prefix>/lib/libds_arena.a\n"
+        "  <prefix>/include/{common,ds_platform,ds_arena,gc}.h\n"
+        "  <prefix>/include/ds_{dyn_array,string,graph,hash_map,linked_list,stack_queue,priority_queue}.h\n"
+        "where <prefix> defaults to /usr/local.")
+endif()
+
+file(READ "${MANIFEST}" manifest_contents)
+string(REGEX REPLACE "\n" ";" manifest_files "${manifest_contents}")
+
+set(removed 0)
+set(missing 0)
+set(failed 0)
+
+foreach(file ${manifest_files})
+    string(STRIP "${file}" file)
+    if(file STREQUAL "")
+        continue()
+    endif()
+
+    # DESTDIR has to be honoured here exactly as it was during install, or a
+    # staged install would be uninstalled from the live system instead.
+    set(target "$ENV{DESTDIR}${file}")
+
+    if(IS_SYMLINK "${target}" OR EXISTS "${target}")
+        message(STATUS "Removing ${target}")
+        file(REMOVE "${target}")
+        if(EXISTS "${target}")
+            message(WARNING "Failed to remove ${target}")
+            math(EXPR failed "${failed} + 1")
+        else()
+            math(EXPR removed "${removed} + 1")
+        endif()
+    else()
+        message(STATUS "Already gone: ${target}")
+        math(EXPR missing "${missing} + 1")
+    endif()
+endforeach()
+
+# The directories themselves are deliberately left alone: include/ and lib/
+# under the prefix are shared with every other package on the system.
+message(STATUS "Uninstall complete -- ${removed} removed, ${missing} already absent, ${failed} failed.")
+
+if(failed GREATER 0)
+    message(FATAL_ERROR "${failed} file(s) could not be removed. Root privileges are usually the reason: try sudo.")
+endif()

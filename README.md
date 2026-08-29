@@ -86,12 +86,52 @@ ctest --test-dir build --build-config Release --output-on-failure
 On Windows the same three commands work verbatim from a Developer Command
 Prompt, or with `-G "Visual Studio 17 2022"`.
 
+### Installing
+
+```bash
+sudo cmake --install build            # or: cd build && sudo make install
+```
+
+Headers land in `<prefix>/include` and the two static libraries in
+`<prefix>/lib`, where `<prefix>` defaults to `/usr/local`. Pass
+`--prefix <dir>` to install elsewhere.
+
+To remove it again:
+
+```bash
+sudo cmake --build build --target uninstall   # or: cd build && sudo make uninstall
+```
+
+The uninstall target reads `install_manifest.txt` from the build directory,
+so it deletes exactly what was installed. Keep the build directory around if
+you want it -- deleting the build tree takes the manifest with it, and the
+files then have to be removed by hand.
+
+### Linking against it
+
+Only the arena and collector:
+
+```bash
+cc -std=c11 -O2 -o myprog myprog.c -lds_arena
+```
+
+Any of the data structures as well:
+
+```bash
+cc -std=c11 -O2 -o myprog myprog.c -lds -lds_arena
+```
+
+`libds_arena.a` is self-contained; `libds.a` depends on it, so it comes
+first. See `examples/arena_frames.c` for an arena-only program.
+
 ### Build options
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| `DS_BUILD_TESTS` | `ON` | Build and register the `ds_tests` suite |
-| `DS_BUILD_BENCH` | `ON` | Build the benchmark executables |
+| `DS_BUILD_TESTS` | `ON` | Build the ten per-structure test suites and register them with ctest |
+| `DS_BUILD_BENCH` | `ON` | Build the nine benchmark programs; `--target bench` runs them all |
+| `DS_BUILD_FUZZ` | `ON` | Build the three fuzz harnesses |
+| `DS_LIBFUZZER` | `OFF` | Drive the fuzzers with clang's libFuzzer instead of the built-in deterministic driver |
 | `DS_WERROR` | `OFF` | Treat compiler warnings as errors |
 | `DS_NATIVE_ARCH` | `OFF` | Add `-march=native`. Faster, but the resulting binary is not portable to other CPUs — leave it off for anything you distribute |
 
