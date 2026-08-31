@@ -1,0 +1,92 @@
+﻿Begin Test Data Block
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+
+Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+
+0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789
+
+abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ
+
+!@#%^&()_+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&()+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&*()+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&()_+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&()+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&*()+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&()_+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&()+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&*()+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&()_+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&()+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&*()+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&()_+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~ !@#%^&()_+-=[]{}|;:',.<>?/~ !@#$%^&*()_+-=[]{}|;:',.<>?/~
+
+This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms. This is a repeated sentence to test pattern matching and string search algorithms.
+
+Now, let's add some structured data that might resemble CSV or log entries:
+UserID: 1001, Action: Login, Timestamp: 2023-10-01T12:00:00Z, Status: SUCCESS
+UserID: 1002, Action: Logout, Timestamp: 2023-10-01T12:05:00Z, Status: SUCCESS
+UserID: 1003, Action: Purchase, Timestamp: 2023-10-01T12:10:00Z, Status: FAILED
+UserID: 1004, Action: Login, Timestamp: 2023-10-01T12:15:00Z, Status: SUCCESS
+UserID: 1005, Action: View, Timestamp: 2023-10-01T12:20:00Z, Status: SUCCESS
+UserID: 1006, Action: Login, Timestamp: 2023-10-01T12:25:00Z, Status: FAILED
+UserID: 1007, Action: Logout, Timestamp: 2023-10-01T12:30:00Z, Status: SUCCESS
+UserID: 1008, Action: Purchase, Timestamp: 2023-10-01T12:35:00Z, Status: SUCCESS
+UserID: 1009, Action: Login, Timestamp: 2023-10-01T12:40:00Z, Status: SUCCESS
+UserID: 1010, Action: View, Timestamp: 2023-10-01T12:45:00Z, Status: FAILED
+UserID: 1011, Action: Login, Timestamp: 2023-10-01T12:50:00Z, Status: SUCCESS
+UserID: 1012, Action: Logout, Timestamp: 2023-10-01T12:55:00Z, Status: SUCCESS
+UserID: 1013, Action: Purchase, Timestamp: 2023-10-01T13:00:00Z, Status: SUCCESS
+UserID: 1014, Action: Login, Timestamp: 2023-10-01T13:05:00Z, Status: FAILED
+UserID: 1015, Action: View, Timestamp: 2023-10-01T13:10:00Z, Status: SUCCESS
+UserID: 1016, Action: Login, Timestamp: 2023-10-01T13:15:00Z, Status: SUCCESS
+UserID: 1017, Action: Logout, Timestamp: 2023-10-01T13:20:00Z, Status: SUCCESS
+UserID: 1018, Action: Purchase, Timestamp: 2023-10-01T13:25:00Z, Status: FAILED
+UserID: 1019, Action: Login, Timestamp: 2023-10-01T13:30:00Z, Status: SUCCESS
+UserID: 1020, Action: View, Timestamp: 2023-10-01T13:35:00Z, Status: SUCCESS
+
+Repeating the CSV block to increase size:
+UserID: 1001, Action: Login, Timestamp: 2023-10-01T12:00:00Z, Status: SUCCESS
+UserID: 1002, Action: Logout, Timestamp: 2023-10-01T12:05:00Z, Status: SUCCESS
+UserID: 1003, Action: Purchase, Timestamp: 2023-10-01T12:10:00Z, Status: FAILED
+UserID: 1004, Action: Login, Timestamp: 2023-10-01T12:15:00Z, Status: SUCCESS
+UserID: 1005, Action: View, Timestamp: 2023-10-01T12:20:00Z, Status: SUCCESS
+UserID: 1006, Action: Login, Timestamp: 2023-10-01T12:25:00Z, Status: FAILED
+UserID: 1007, Action: Logout, Timestamp: 2023-10-01T12:30:00Z, Status: SUCCESS
+UserID: 1008, Action: Purchase, Timestamp: 2023-10-01T12:35:00Z, Status: SUCCESS
+UserID: 1009, Action: Login, Timestamp: 2023-10-01T12:40:00Z, Status: SUCCESS
+UserID: 1010, Action: View, Timestamp: 2023-10-01T12:45:00Z, Status: FAILED
+UserID: 1011, Action: Login, Timestamp: 2023-10-01T12:50:00Z, Status: SUCCESS
+UserID: 1012, Action: Logout, Timestamp: 2023-10-01T12:55:00Z, Status: SUCCESS
+UserID: 1013, Action: Purchase, Timestamp: 2023-10-01T13:00:00Z, Status: SUCCESS
+UserID: 1014, Action: Login, Timestamp: 2023-10-01T13:05:00Z, Status: FAILED
+UserID: 1015, Action: View, Timestamp: 2023-10-01T13:10:00Z, Status: SUCCESS
+UserID: 1016, Action: Login, Timestamp: 2023-10-01T13:15:00Z, Status: SUCCESS
+UserID: 1017, Action: Logout, Timestamp: 2023-10-01T13:20:00Z, Status: SUCCESS
+UserID: 1018, Action: Purchase, Timestamp: 2023-10-01T13:25:00Z, Status: FAILED
+UserID: 1019, Action: Login, Timestamp: 2023-10-01T13:30:00Z, Status: SUCCESS
+UserID: 1020, Action: View, Timestamp: 2023-10-01T13:35:00Z, Status: SUCCESS
+
+Adding a block of JSON-like data for structured testing:
+{"id": 1, "name": "Alice", "active": true, "scores": [95, 87, 92]}
+{"id": 2, "name": "Bob", "active": false, "scores": [78, 85, 80]}
+{"id": 3, "name": "Charlie", "active": true, "scores": [88, 91, 84]}
+{"id": 4, "name": "Diana", "active": true, "scores": [92, 95, 89]}
+{"id": 5, "name": "Eve", "active": false, "scores": [70, 75, 72]}
+{"id": 6, "name": "Frank", "active": true, "scores": [85, 88, 86]}
+{"id": 7, "name": "Grace", "active": true, "scores": [90, 93, 91]}
+{"id": 8, "name": "Heidi", "active": false, "scores": [65, 70, 68]}
+{"id": 9, "name": "Ivan", "active": true, "scores": [80, 82, 79]}
+{"id": 10, "name": "Judy", "active": true, "scores": [94, 96, 93]}
+
+Repeating the JSON block to increase size:
+{"id": 1, "name": "Alice", "active": true, "scores": [95, 87, 92]}
+{"id": 2, "name": "Bob", "active": false, "scores": [78, 85, 80]}
+{"id": 3, "name": "Charlie", "active": true, "scores": [88, 91, 84]}
+{"id": 4, "name": "Diana", "active": true, "scores": [92, 95, 89]}
+{"id": 5, "name": "Eve", "active": false, "scores": [70, 75, 72]}
+{"id": 6, "name": "Frank", "active": true, "scores": [85, 88, 86]}
+{"id": 7, "name": "Grace", "active": true, "scores": [90, 93, 91]}
+{"id": 8, "name": "Heidi", "active": false, "scores": [65, 70, 68]}
+{"id": 9, "name": "Ivan", "active": true, "scores": [80, 82, 79]}
+{"id": 10, "name": "Judy", "active": true, "scores": [94, 96, 93]}
+
+Now, a section with random words and numbers to test tokenization:
+apple banana cherry 12345 dog elephant 67890 fish grape 11111 hello igloo 22222 jacket kangaroo 33333 lion mango 44444 night owl 55555 pizza queen 66666 rabbit snake 77777 tiger umbrella 88888 violin whale 99999 x-ray yak 00000 zebra apple banana cherry 12345 dog elephant 67890 fish grape 11111 hello igloo 22222 jacket kangaroo 33333 lion mango 44444 night owl 55555 pizza queen 66666 rabbit snake 77777 tiger umbrella 88888 violin whale 99999 x-ray yak 00000 zebra apple banana cherry 12345 dog elephant 67890 fish grape 11111 hello igloo 22222 jacket kangaroo 33333 lion mango 44444 night owl 55555 pizza queen 66666 rabbit snake 77777 tiger umbrella 88888 violin whale 99999 x-ray yak 00000 zebra apple banana cherry 12345 dog elephant 67890 fish grape 11111 hello igloo 22222 jacket kangaroo 33333 lion mango 44444 night owl 55555 pizza queen 66666 rabbit snake 77777 tiger umbrella 88888 violin whale 99999 x-ray yak 00000 zebra apple banana cherry 12345 dog elephant 67890 fish grape 11111 hello igloo 22222 jacket kangaroo 33333 lion mango 44444 night owl 55555 pizza queen 66666 rabbit snake 77777 tiger umbrella 88888 violin whale 99999 x-ray yak 00000 zebra
+
+This text is designed to be large, approximately several kilobytes, with a mix of repeated and unique content. It should be suitable for testing memory usage, search speed, insertion, deletion, and iteration in your data structures. The inclusion of numbers, special characters, and structured data (CSV, JSON) will help test parsing and type handling.
+
+The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.
+
+Finally, let's end with a long string of a single character to test edge cases:
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+End Test Data Block
