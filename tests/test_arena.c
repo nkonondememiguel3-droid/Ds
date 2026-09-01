@@ -1,10 +1,16 @@
-/* The arena allocator: block headers, alignment, reuse, coalescing. */
+/*
+ * The arena allocator: block headers, alignment, reuse, coalescing.
+ *
+ * This suite links libds_arena.a and nothing else -- no collector, no data
+ * structures. If the arena ever grows a dependency on gc.h it stops linking,
+ * which is the cheapest possible guard on the split between the two.
+ */
 
 #include <string.h>
 
 #include "ds_arena.h"
 #include "ds_test.h"
-#include "gc.h"
+#include "ds_value.h"
 
 static size_t largest_free(const _ds_arena_t_ *a) {
   const _ds_arena_chunk_t_ *c;
@@ -56,7 +62,7 @@ static void test_block_headers(void) {
   CHECK(ds_block_of(managed)->state == DS_BLOCK_MANAGED, "a managed allocation is marked managed");
   CHECK(ds_block_of(raw)->magic == DS_BLOCK_MAGIC, "the header carries its magic");
   CHECK(ds_block_of(raw)->total_size == 64 + ARENA_ALIGN, "total_size covers header plus payload");
-  CHECK(a->gc_live_allocations == 1, "only the managed block counts as live");
+  CHECK(a->live_managed_allocations == 1, "only the managed block counts as live");
 
   /* The size argument to recycle is advisory now: the header is
    * authoritative. Requiring callers to remember their own allocation size
@@ -124,26 +130,60 @@ static void test_chunk_growth(void) {
 
 static void test_coalescing(void) {
   _ds_arena_t_ *a = ds_arena_new(0);
+  void *blocks[200];
   int i;
   size_t expected;
 
-  SECTION("sweep coalescing");
+  SECTION("coalescing");
 
-  for (i = 0; i < 200; i++) ds_arena_alloc(a, 48, NULL); /* unreachable */
+  for (i = 0; i < 200; i++) blocks[i] = ds_arena_alloc_raw(a, 48);
   expected = 200 * (48 + ARENA_ALIGN);
 
-  ds_arena_run_gc(a);
-  CHECK(a->gc_live_allocations == 0, "all 200 orphans are swept");
+  /* Recycling links a block onto its chunk's list; it does not merge.
+   * Straight after this the free space is 200 unusable crumbs. */
+  for (i = 0; i < 200; i++) ds_arena_recycle_raw(a, blocks[i], 48);
+  CHECK(a->total_free_bytes_in_list == expected, "every recycled byte is accounted for");
+  CHECK(largest_free(a) == 48 + ARENA_ALIGN, "recycling on its own leaves the blocks unmerged");
 
-  /* The sweep walks each chunk in address order, so the dead blocks are
-   * neighbours in the walk and merge. The old head-insert scheme swept in
-   * pointer-hash order and merged essentially nothing, leaving the free
-   * list as a pile of unusable crumbs. */
-  CHECK(largest_free(a) >= expected * 9 / 10, "regression: adjacent dead blocks coalesce into one large free block");
+  /* The rebuild walks each chunk in address order, so neighbours are
+   * consecutive iterations and merge. A collector's sweep finishes with this
+   * pass, but it is arena machinery and works with no collector in sight. */
+  ds_arena_rebuild_free_lists(a);
+  CHECK(largest_free(a) >= expected * 9 / 10, "regression: adjacent free blocks coalesce into one large block");
+  CHECK(a->total_free_bytes_in_list == expected, "the rebuilt list still accounts for every free byte");
 
   {
     void *big = ds_arena_alloc_raw(a, expected / 2);
     CHECK(big != NULL && a->allocs_from_free_list > 0, "the coalesced region is reusable");
+  }
+
+  ds_arena_destroy(a);
+}
+
+static void test_no_collector(void) {
+  _ds_arena_t_ *a = ds_arena_new(0);
+  void *managed;
+
+  SECTION("no collector attached");
+
+  /* ds_arena_alloc records a descriptor and a state; interpreting them is
+   * somebody else's job. Nothing here attaches a collector, and destroying
+   * the arena must not go looking for one. */
+  managed = ds_arena_alloc(a, 64, NULL);
+  CHECK(managed != NULL, "a managed allocation works without a collector");
+  CHECK(a->collector == NULL && a->collector_destroy == NULL, "the arena never attaches a collector by itself");
+  CHECK(a->live_managed_allocations == 1, "the block is counted as managed all the same");
+
+  /* Promote/demote is the hook a collector uses; it is pure arena
+   * bookkeeping and needs none of one. */
+  {
+    void *raw = ds_arena_alloc_raw(a, 32);
+    CHECK(ds_arena_block_promote(a, raw, NULL) == 1, "a raw block can be promoted");
+    CHECK(a->live_managed_allocations == 2, "promotion updates the live count");
+    CHECK(ds_arena_block_promote(a, raw, NULL) == 0, "promoting twice is a no-op");
+    CHECK(ds_arena_block_demote(a, raw) == 1, "a managed block can be demoted");
+    CHECK(a->live_managed_allocations == 1, "demotion updates the live count");
+    CHECK(ds_arena_block_demote(a, raw) == 0, "demoting twice is a no-op");
   }
 
   ds_arena_destroy(a);
@@ -167,6 +207,7 @@ int main(void) {
   test_free_list_reuse();
   test_chunk_growth();
   test_coalescing();
+  test_no_collector();
   test_null_safety();
   return ds_test_end();
 }

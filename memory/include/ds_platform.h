@@ -92,6 +92,16 @@
 #define DS_UNUSED(x) (void)(x)
 #endif
 
+/* Compile-time assertion. C11 spells it _Static_assert; the fallback is the
+ * classic negative-array-size trick for a pre-C11 compiler. Every layer of
+ * the library uses it to pin down a layout invariant, so it lives here with
+ * the rest of the language shims rather than in any one layer's header. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define DS_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#else
+#define DS_STATIC_ASSERT(cond, msg) typedef char ds_static_assert_##__LINE__[(cond) ? 1 : -1]
+#endif
+
 /* MSVC's CRT flags snprintf/vsnprintf/strcpy as "unsafe"; we use them
  * correctly and portably, so silence the deprecation wholesale. */
 #if DS_COMPILER_MSVC && !defined(_CRT_SECURE_NO_WARNINGS)

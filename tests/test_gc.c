@@ -55,17 +55,17 @@ static void test_cycles(void) {
   ds_gc_register_root(a, &root);
 
   for (i = 0; i < 200; i++) ARENA_NEW(a, Cell, &cell_descriptor);
-  CHECK(a->gc_live_allocations == 202, "202 managed objects are live");
+  CHECK(a->live_managed_allocations == 202, "202 managed objects are live");
 
   ds_arena_run_gc(a);
-  CHECK(a->gc_live_allocations == 2, "the rooted cycle survives, the 200 orphans are swept");
+  CHECK(a->live_managed_allocations == 2, "the rooted cycle survives, the 200 orphans are swept");
 
   ds_arena_run_gc(a);
-  CHECK(a->gc_live_allocations == 2, "a second collection is idempotent");
+  CHECK(a->live_managed_allocations == 2, "a second collection is idempotent");
 
   root = ds_make_nil();
   ds_arena_run_gc(a);
-  CHECK(a->gc_live_allocations == 0, "breaking the root collects the cycle itself");
+  CHECK(a->live_managed_allocations == 0, "breaking the root collects the cycle itself");
 
   ds_gc_unregister_root(a, &root);
   ds_arena_destroy(a);
@@ -101,7 +101,7 @@ static void test_raw_is_not_traced(void) {
   root = ds_tag_ptr(ds_arena_alloc_raw(a, 128), TYPE_STRING);
   ds_gc_register_root(a, &root);
   ds_arena_run_gc(a);
-  CHECK(a->gc_live_allocations == 0, "a raw buffer is neither traced nor swept");
+  CHECK(a->live_managed_allocations == 0, "a raw buffer is neither traced nor swept");
 
   ds_gc_unregister_root(a, &root);
   ds_arena_destroy(a);
@@ -179,9 +179,85 @@ static void test_mark_stack_bound(void) {
   CHECK(list->length == 20000, "the list survives the collection intact");
   /* Following `next` alone reaches every node on a circular chain; pushing
    * `prev` too grew this stack to 32768 entries for the same 20k nodes. */
-  CHECK(a->gc_mark_stack_cap <= 2048, "regression: the mark stack stays bounded when tracing a long list");
+  CHECK(ds_gc_state_of(a)->mark_stack_cap <= 2048, "regression: the mark stack stays bounded when tracing a long list");
 
   ds_gc_unregister_root(a, &root);
+  ds_arena_destroy(a);
+}
+
+static size_t largest_free(const _ds_arena_t_ *a) {
+  const _ds_arena_chunk_t_ *c;
+  size_t largest = 0;
+  for (c = a->head; c; c = c->next_arena_chunk) {
+    const _ds_free_cell_t_ *fc;
+    for (fc = c->free_list_head; fc; fc = fc->next) {
+      size_t sz = (((const _ds_block_header_t_ *)fc) - 1)->total_size;
+      if (sz > largest) largest = sz;
+    }
+  }
+  return largest;
+}
+
+static void test_sweep_coalescing(void) {
+  _ds_arena_t_ *a = ds_arena_new(0);
+  int i;
+  size_t expected;
+
+  SECTION("sweep coalescing");
+
+  for (i = 0; i < 200; i++) ds_arena_alloc(a, 48, NULL); /* unreachable */
+  expected = 200 * (48 + ARENA_ALIGN);
+
+  ds_arena_run_gc(a);
+  CHECK(a->live_managed_allocations == 0, "all 200 orphans are swept");
+
+  /* The sweep hands the freed blocks to ds_arena_rebuild_free_lists, which
+   * walks each chunk in address order and merges neighbours. The old
+   * head-insert scheme swept in pointer-hash order and merged essentially
+   * nothing, leaving the free list as a pile of unusable crumbs. */
+  CHECK(largest_free(a) >= expected * 9 / 10, "regression: adjacent dead blocks coalesce into one large free block");
+
+  {
+    void *big = ds_arena_alloc_raw(a, expected / 2);
+    CHECK(big != NULL && a->allocs_from_free_list > 0, "the coalesced region is reusable");
+  }
+
+  ds_arena_destroy(a);
+}
+
+static void test_collector_attachment(void) {
+  _ds_arena_t_ *a = ds_arena_new(0);
+  ds_node_t root = ds_make_nil();
+
+  SECTION("collector attachment");
+
+  /* The collector keeps no state inside the arena struct: a fresh arena has
+   * none, and the first call that needs some allocates it. */
+  CHECK(ds_gc_state_of(a) == NULL, "a fresh arena has no collector state");
+
+  ds_gc_register_root(a, &root);
+  CHECK(ds_gc_state_of(a) != NULL, "registering a root attaches the collector");
+  CHECK(a->collector_destroy != NULL, "the arena is given a teardown hook to call");
+  CHECK(ds_gc_state_of(a)->roots != NULL, "the root is recorded in the collector state, not the arena");
+
+  ds_gc_unregister_root(a, &root);
+  ds_arena_destroy(a);
+}
+
+static void test_collect_without_roots(void) {
+  _ds_arena_t_ *a = ds_arena_new(0);
+  int i;
+
+  SECTION("collection with no roots");
+
+  /* Nothing has ever attached collector state here, so there are no roots
+   * and nothing is reachable. The sweep still has to run. */
+  for (i = 0; i < 10; i++) ds_arena_alloc(a, 32, &cell_descriptor);
+  CHECK(ds_gc_state_of(a) == NULL, "allocating managed blocks does not attach a collector");
+
+  ds_arena_run_gc(a);
+  CHECK(a->live_managed_allocations == 0, "with no roots registered, every managed block is garbage");
+
   ds_arena_destroy(a);
 }
 
@@ -196,13 +272,13 @@ static void test_root_lifecycle(void) {
   root = ds_tag_ptr(c, TYPE_NODE);
   ds_gc_register_root(a, &root);
   ds_arena_run_gc(a);
-  CHECK(a->gc_live_allocations == 1, "a rooted object survives");
+  CHECK(a->live_managed_allocations == 1, "a rooted object survives");
 
   /* A root points at a variable. If that variable is a local, it has to be
    * deregistered before its frame goes away. */
   ds_gc_unregister_root(a, &root);
   ds_arena_run_gc(a);
-  CHECK(a->gc_live_allocations == 0, "deregistering the root makes the object collectable");
+  CHECK(a->live_managed_allocations == 0, "deregistering the root makes the object collectable");
 
   ds_gc_unregister_root(a, &root);
   CHECK(1, "deregistering twice is harmless");
@@ -218,6 +294,9 @@ int main(void) {
   test_raw_is_not_traced();
   test_reachability_through_containers();
   test_mark_stack_bound();
+  test_sweep_coalescing();
+  test_collector_attachment();
+  test_collect_without_roots();
   test_root_lifecycle();
   return ds_test_end();
 }

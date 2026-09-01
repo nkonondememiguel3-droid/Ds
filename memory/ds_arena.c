@@ -4,8 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "common.h"
-#include "gc.h"
+/*
+ * Nothing in this file includes gc.h. That is the point: the arena is a byte
+ * allocator, and the collector is a separate library layered on top of the
+ * hooks at the bottom of this file.
+ */
 
 size_t ds_arena_align_up(size_t n) { return (n + (ARENA_ALIGN - 1)) & ~(size_t)(ARENA_ALIGN - 1); }
 
@@ -87,9 +90,9 @@ static void ds_block_init(_ds_block_header_t_ *h, size_t total, const ds_type_de
 }
 
 static void ds_account_live(_ds_arena_t_ *a, size_t total) {
-  a->gc_live_allocations++;
-  a->gc_live_bytes += total;
-  if (a->gc_live_bytes > a->gc_peak_live_bytes) a->gc_peak_live_bytes = a->gc_live_bytes;
+  a->live_managed_allocations++;
+  a->live_managed_bytes += total;
+  if (a->live_managed_bytes > a->peak_live_managed_bytes) a->peak_live_managed_bytes = a->live_managed_bytes;
 }
 
 static void *ds_arena_alloc_block(_ds_arena_t_ *a, size_t payload, const ds_type_descriptor_t *desc, uint8_t state) {
@@ -224,8 +227,8 @@ void ds_arena_recycle_raw(_ds_arena_t_ *a, void *dead_ptr, size_t size) {
   if (!c) return;
 
   if (h->state == DS_BLOCK_MANAGED) {
-    a->gc_live_allocations--;
-    a->gc_live_bytes -= h->total_size;
+    a->live_managed_allocations--;
+    a->live_managed_bytes -= h->total_size;
   }
 
   h->state = DS_BLOCK_FREE;
@@ -242,6 +245,128 @@ void ds_arena_recycle_raw(_ds_arena_t_ *a, void *dead_ptr, size_t size) {
 void ds_arena_recycle(_ds_arena_t_ *a, void *dead_ptr, size_t size) { ds_arena_recycle_raw(a, dead_ptr, size); }
 
 /* ------------------------------------------------------------------ */
+/* Hooks for a collector                                               */
+/* ------------------------------------------------------------------ */
+
+int ds_arena_block_promote(_ds_arena_t_ *a, void *ptr, const ds_type_descriptor_t *desc) {
+  _ds_block_header_t_ *h;
+
+  if (!a || !ptr) return 0;
+
+  h = ds_block_of(ptr);
+  if (h->magic != DS_BLOCK_MAGIC || h->state != DS_BLOCK_RAW) return 0;
+
+  h->state = DS_BLOCK_MANAGED;
+  h->descriptor = desc;
+  h->marked = 0;
+  ds_account_live(a, h->total_size);
+  return 1;
+}
+
+int ds_arena_block_demote(_ds_arena_t_ *a, void *ptr) {
+  _ds_block_header_t_ *h;
+
+  if (!a || !ptr) return 0;
+
+  h = ds_block_of(ptr);
+  if (h->magic != DS_BLOCK_MAGIC || h->state != DS_BLOCK_MANAGED) return 0;
+
+  h->state = DS_BLOCK_RAW;
+  h->descriptor = NULL;
+  h->marked = 0;
+  a->live_managed_allocations--;
+  a->live_managed_bytes -= h->total_size;
+  return 1;
+}
+
+/* ds_arena_block_retire is inline in ds_arena.h: a sweep calls it per block. */
+
+void ds_arena_reset_free_lists(_ds_arena_t_ *a) {
+  _ds_arena_chunk_t_ *c;
+
+  if (!a) return;
+
+  for (c = a->head; c; c = c->next_arena_chunk) {
+    c->free_list_head = NULL;
+    c->on_free_ring = 0;
+    c->next_free_chunk = NULL;
+  }
+  a->free_chunks = NULL;
+  a->total_free_bytes_in_list = 0;
+}
+
+static void ds_arena_rebuild_chunk(_ds_arena_t_ *a, _ds_arena_chunk_t_ *c) {
+  char *p = c->payload;
+  char *end = c->payload + c->chunk_size_used;
+  _ds_block_header_t_ *run = NULL; /* open run of adjacent free blocks */
+
+  c->free_list_head = NULL;
+
+  /* The walk visits blocks in address order, so neighbours are consecutive
+   * iterations and merging them is a comparison away. The previous
+   * head-insert scheme could only ever merge a block with whatever happened
+   * to be at the head of the list, and the old sweep visited objects in
+   * pointer-hash order, so in practice it merged nothing. */
+  while (p < end) {
+    _ds_block_header_t_ *h = (_ds_block_header_t_ *)(void *)p;
+    size_t step = h->total_size;
+
+    if (step < DS_MIN_BLOCK || p + step > end) {
+      fputs("ds: arena corruption detected while rebuilding the free lists\n", stderr);
+      abort();
+    }
+
+    if (h->state == DS_BLOCK_FREE) {
+      if (run && (char *)run + run->total_size == p) {
+        run->total_size += h->total_size; /* absorb into the open run */
+      } else {
+        _ds_free_cell_t_ *cell = (_ds_free_cell_t_ *)ds_payload_of(h);
+        cell->next = c->free_list_head;
+        c->free_list_head = cell;
+        run = h;
+      }
+    } else {
+      run = NULL;
+    }
+
+    p += step;
+  }
+
+  /* A merged run's size grew after it was linked, so the byte total has to
+   * be taken from the finished list rather than accumulated above. */
+  {
+    const _ds_free_cell_t_ *fc;
+    size_t chunk_free = 0;
+    for (fc = c->free_list_head; fc; fc = fc->next) {
+      chunk_free += (((const _ds_block_header_t_ *)fc) - 1)->total_size;
+    }
+    a->total_free_bytes_in_list += chunk_free;
+  }
+
+  if (c->free_list_head) {
+    c->on_free_ring = 1;
+    c->next_free_chunk = a->free_chunks;
+    a->free_chunks = c;
+  }
+}
+
+/*
+ * Deriving the lists from block state rather than from a record of what was
+ * released is what makes this safe to call at any point, however the blocks
+ * came to be free -- including from inside a finalizer that ran during a
+ * sweep. Every free block is linked exactly once because the walk visits
+ * every block exactly once.
+ */
+void ds_arena_rebuild_free_lists(_ds_arena_t_ *a) {
+  _ds_arena_chunk_t_ *c;
+
+  if (!a) return;
+
+  ds_arena_reset_free_lists(a);
+  for (c = a->head; c; c = c->next_arena_chunk) ds_arena_rebuild_chunk(a, c);
+}
+
+/* ------------------------------------------------------------------ */
 /* Teardown and telemetry                                              */
 /* ------------------------------------------------------------------ */
 
@@ -250,9 +375,11 @@ void ds_arena_destroy(_ds_arena_t_ *a) {
 
   if (!a) return;
 
-  free(a->gc_mark_stack);
-  a->gc_mark_stack = NULL;
-  a->gc_roots = NULL; /* roots live inside the chunks freed just below */
+  /* Let an attached collector release whatever it holds outside the arena.
+   * Its own state, and the roots, live in chunks freed just below. */
+  if (a->collector_destroy) a->collector_destroy(a);
+  a->collector = NULL;
+  a->collector_destroy = NULL;
 
   c = a->head;
   while (c) {
@@ -300,9 +427,10 @@ void ds_arena_print_stats(const _ds_arena_t_ *a) {
   printf("Memory held in the free list        : %zu bytes\n", a->total_free_bytes_in_list);
   printf("Largest available free block        : %zu bytes\n", largest_free_block);
   printf("--------------------------------------------------\n");
-  printf("Live GC allocations                 : %zu\n", a->gc_live_allocations);
-  printf("Live GC bytes                       : %zu bytes\n", a->gc_live_bytes);
-  printf("Peak live GC bytes                  : %zu bytes\n", a->gc_peak_live_bytes);
+  printf("Live managed allocations            : %zu\n", a->live_managed_allocations);
+  printf("Live managed bytes                  : %zu bytes\n", a->live_managed_bytes);
+  printf("Peak live managed bytes             : %zu bytes\n", a->peak_live_managed_bytes);
+  printf("Collector attached                  : %s\n", a->collector ? "yes" : "no");
   printf("External fragmentation ratio        : %.2f%%\n", frag_ratio);
   printf("==================================================\n\n");
 }

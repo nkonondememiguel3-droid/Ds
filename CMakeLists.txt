@@ -85,7 +85,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
 )
 
-target_link_libraries(${PROJECT_NAME} PUBLIC ds_arena)
+target_link_libraries(${PROJECT_NAME} PUBLIC ds_gc)
 
 # On Unix, linking libm is needed for the floating point helpers in some
 # libc builds; it does not exist (and is not needed) on Windows.
@@ -96,10 +96,25 @@ endif()
 # --------------------------------------------------------------------
 # Executables
 # --------------------------------------------------------------------
-function(ds_add_program name)
+# `lib` is the single library the program links. Most programs want the whole
+# stack (ds -> ds_gc -> ds_arena), but the arena suites deliberately link
+# ds_arena alone: if the allocator ever grows a dependency on the collector,
+# those targets stop linking, which is the point of building them that way.
+function(ds_add_program name lib)
     add_executable(${name} ${ARGN})
     ds_set_target_flags(${name})
-    target_link_libraries(${name} PRIVATE ${PROJECT_NAME})
+    target_link_libraries(${name} PRIVATE ${lib})
+endfunction()
+
+# Suites that must build against the arena on its own.
+set(DS_ARENA_ONLY test_arena bench_arena)
+
+function(ds_program_library out name)
+    if(${name} IN_LIST DS_ARENA_ONLY)
+        set(${out} ds_arena PARENT_SCOPE)
+    else()
+        set(${out} ${PROJECT_NAME} PARENT_SCOPE)
+    endif()
 endfunction()
 
 # One test executable and one benchmark executable per data structure, so a
@@ -116,7 +131,8 @@ set(DS_BENCH_SUITES
 if(DS_BUILD_TESTS)
     enable_testing()
     foreach(suite IN LISTS DS_TEST_SUITES)
-        ds_add_program(test_${suite} tests/test_${suite}.c)
+        ds_program_library(_lib test_${suite})
+        ds_add_program(test_${suite} ${_lib} tests/test_${suite}.c)
         target_include_directories(test_${suite} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
         add_test(NAME ${suite} COMMAND test_${suite})
     endforeach()
@@ -126,7 +142,7 @@ set(DS_FUZZ_SUITES string arena containers)
 
 if(DS_BUILD_FUZZ)
     foreach(suite IN LISTS DS_FUZZ_SUITES)
-        ds_add_program(fuzz_${suite} tests/fuzz_${suite}.c)
+        ds_add_program(fuzz_${suite} ${PROJECT_NAME} tests/fuzz_${suite}.c)
         target_include_directories(fuzz_${suite} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
         if(DS_LIBFUZZER)
             # Coverage-guided. Requires clang with the fuzzer runtime.
@@ -144,12 +160,13 @@ endif()
 if(DS_BUILD_BENCH)
     set(DS_BENCH_TARGETS "")
     foreach(suite IN LISTS DS_BENCH_SUITES)
-        ds_add_program(bench_${suite} tests/bench_${suite}.c)
+        ds_program_library(_lib bench_${suite})
+        ds_add_program(bench_${suite} ${_lib} tests/bench_${suite}.c)
         target_include_directories(bench_${suite} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
         list(APPEND DS_BENCH_TARGETS bench_${suite})
     endforeach()
 
-    ds_add_program(main main.c)
+    ds_add_program(main ${PROJECT_NAME} main.c)
 
     # `cmake --build build --target bench` builds and runs the whole set.
     add_custom_target(bench DEPENDS ${DS_BENCH_TARGETS})
@@ -180,11 +197,12 @@ set(DS_PUBLIC_HEADERS
 set(DS_MEMORY_HEADERS
     memory/include/common.h
     memory/include/ds_platform.h
+    memory/include/ds_value.h
     memory/include/ds_arena.h
     memory/include/gc.h
 )
 
-install(TARGETS ${PROJECT_NAME} ds_arena ARCHIVE DESTINATION lib)
+install(TARGETS ${PROJECT_NAME} ds_gc ds_arena ARCHIVE DESTINATION lib)
 
 # Flattened into one directory: the headers include each other by bare
 # name, so a consumer needs them all on a single include path.

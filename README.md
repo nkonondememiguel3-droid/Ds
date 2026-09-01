@@ -3,6 +3,11 @@
 A C11 data structures library backed by a **managed memory arena** and a
 **mark-and-sweep garbage collector**.
 
+The arena and the collector are **two separate libraries**. `libds_arena.a`
+is a standalone allocator that knows nothing about values, roots or
+collection; `libds_gc.a` is a collector layered on top of it. Link the arena
+on its own and no collector code enters your program.
+
 By leveraging **tagged pointers** on a strict 16-byte alignment constraint, the
 framework avoids `malloc`/`free` on the hot path, keeps allocations dense for
 cache locality, and tracks live objects without a per-object header.
@@ -26,7 +31,28 @@ type tag inside the pointer word itself:
 `ds_node_t` is a fixed 64-bit word rather than a `uintptr_t`, so the encoding
 holds a full 32-bit `int` or `float` payload plus its tag on 32-bit targets too.
 
-### 2. Arena with a chunk-local free list
+### 2. Three layers, one dependency direction
+
+```
+ ds_value.h    the tagged word           (header only, no allocator)
+ libds_arena.a the allocator             ds_arena.h
+ libds_gc.a    mark and sweep            gc.h        -> depends on ds_arena
+ libds.a       the data structures       ds_*.h      -> depends on ds_gc
+```
+
+The arrows never point upwards. No arena source includes `gc.h`, and the
+arena struct holds no collector state: a collector attaches its own state to
+the arena's opaque `collector` slot the first time something needs it, along
+with the teardown hook `ds_arena_destroy` calls.
+
+What the arena does provide is the substrate a collector needs -- a state, a
+mark bit and one opaque metadata pointer in every block header, the ability
+to move blocks between the traced and untraced states, and a free-list
+rebuild that derives the lists from block state alone. The collector decides
+which blocks are dead; the arena decides how free space is tracked. Anyone
+can write a different policy on the same hooks.
+
+### 3. Arena with a chunk-local free list
 
 Rather than blocking memory until the arena is destroyed, dead blocks are
 pushed onto a free list that is confined to the chunk they came from, so a
@@ -35,7 +61,7 @@ Allocation checks that free list (up to `DS_FREELIST_SCAN_LIMIT` cells, which
 keeps allocation O(1) rather than O(free blocks)) before advancing the bump
 pointer, and adjacent blocks are coalesced on release.
 
-### 3. Descriptor-driven mark and sweep
+### 4. Descriptor-driven mark and sweep
 
 The collector is generic: it knows nothing about lists, maps or graphs. Each
 type registers a `ds_type_descriptor_t` with a `mark` callback (enqueue the
@@ -57,7 +83,7 @@ static void my_type_finalize(void *ptr, _ds_arena_t_ *a) {
 static const ds_type_descriptor_t my_descriptor = { my_type_mark, my_type_finalize };
 ```
 
-### 4. Runtime-dispatched SIMD
+### 5. Runtime-dispatched SIMD
 
 `ds_str_find` uses an AVX2 kernel when the compiler can emit it *and*
 `ds_cpu_has_avx2()` confirms the running CPU and OS support it (including the
@@ -92,8 +118,8 @@ Prompt, or with `-G "Visual Studio 17 2022"`.
 sudo cmake --install build            # or: cd build && sudo make install
 ```
 
-Headers land in `<prefix>/include` and the two static libraries in
-`<prefix>/lib`, where `<prefix>` defaults to `/usr/local`. Pass
+Headers land in `<prefix>/include` and the three static libraries
+(`libds_arena.a`, `libds_gc.a`, `libds.a`) in `<prefix>/lib`, where `<prefix>` defaults to `/usr/local`. Pass
 `--prefix <dir>` to install elsewhere.
 
 To remove it again:
@@ -109,20 +135,27 @@ files then have to be removed by hand.
 
 ### Linking against it
 
-Only the arena and collector:
+The arena on its own -- a fast bump/free-list allocator, no collector, no
+`ds_node_t`:
 
 ```bash
 cc -std=c11 -O2 -o myprog myprog.c -lds_arena
 ```
 
+The arena plus the collector:
+
+```bash
+cc -std=c11 -O2 -o myprog myprog.c -lds_gc -lds_arena
+```
+
 Any of the data structures as well:
 
 ```bash
-cc -std=c11 -O2 -o myprog myprog.c -lds -lds_arena
+cc -std=c11 -O2 -o myprog myprog.c -lds -lds_gc -lds_arena
 ```
 
-`libds_arena.a` is self-contained; `libds.a` depends on it, so it comes
-first. See `examples/arena_frames.c` for an arena-only program.
+Each library depends only on the ones to its right, so that is the order
+they go in. `libds_arena.a` is self-contained.
 
 ### Build options
 
@@ -138,6 +171,42 @@ first. See `examples/arena_frames.c` for an arena-only program.
 ---
 
 ## API Example
+
+### Arena alone
+
+No collector, no tagged words, one header and one library. Blocks are freed
+explicitly or when the arena dies.
+
+```c
+#include <stdio.h>
+
+#include "ds_arena.h"
+
+int main(void) {
+    _ds_arena_t_ *arena = ds_arena_new(0);   /* 0 = default 1 MiB chunks */
+    char *frame[64];
+    int i;
+
+    for (i = 0; i < 64; i++) frame[i] = (char *)ds_arena_alloc_raw(arena, 100);
+    for (i = 0; i < 64; i++) ds_arena_recycle_raw(arena, frame[i], 100);
+
+    /* Recycling links blocks onto their chunk's free list one at a time.
+     * This pass merges the adjacent ones back into large blocks -- the same
+     * pass a collector's sweep ends with, available without one. */
+    ds_arena_rebuild_free_lists(arena);
+
+    printf("%zu bytes reusable\n", arena->total_free_bytes_in_list);
+
+    ds_arena_destroy(arena);
+    return 0;
+}
+```
+
+```bash
+cc -std=c11 -O2 -o frames frames.c -lds_arena
+```
+
+### Arena with the collector
 
 ```c
 #include <stdio.h>
@@ -195,19 +264,20 @@ int main(void) {
 
 ## Modules
 
-| Header | Contents |
-| --- | --- |
-| `memory/include/ds_platform.h` | Compiler/OS/arch shims, `ds_time_ms`, `ds_cpu_has_avx2` |
-| `memory/include/common.h` | `ds_node_t`, tagging helpers, arena and GC types |
-| `memory/include/ds_arena.h` | Arena allocation and recycling |
-| `memory/include/gc.h` | Roots, registration, `ds_arena_run_gc` |
-| `ds_dyn_array.h` | `ds_array_t` (struct handle) and `ds_da_*` (bare pointer) arrays |
-| `ds_string.h` | Length-prefixed strings, SIMD substring search, split/join/format |
-| `ds_linked_list.h` | Circular doubly linked list |
-| `ds_stack_queue.h` | Stack and queue over the list |
-| `ds_priority_queue.h` | Binary min-heap |
-| `ds_hash_map.h` | String-keyed chaining hash map with auto-resize |
-| `ds_graph.h` | Adjacency-list graph |
+| Header | Library | Contents |
+| --- | --- | --- |
+| `memory/include/ds_platform.h` | -- | Compiler/OS/arch shims, `ds_time_ms`, `ds_cpu_has_avx2`, `DS_STATIC_ASSERT` |
+| `memory/include/ds_value.h` | -- | `ds_node_t` and the tagging helpers. Header-only, depends on nothing |
+| `memory/include/ds_arena.h` | `ds_arena` | Chunks, block headers, allocation, recycling, and the hooks a collector uses |
+| `memory/include/gc.h` | `ds_gc` | Type descriptors, roots, `ds_gc_run` / `ds_arena_run_gc` |
+| `memory/include/common.h` | -- | Compatibility umbrella over the three above. Pulls the collector in; new arena-only code should include `ds_arena.h` instead |
+| `ds_dyn_array.h` | `ds` | `ds_array_t` (struct handle) and `ds_da_*` (bare pointer) arrays |
+| `ds_string.h` | `ds` | Length-prefixed strings, SIMD substring search, split/join/format |
+| `ds_linked_list.h` | `ds` | Circular doubly linked list |
+| `ds_stack_queue.h` | `ds` | Stack and queue over the list |
+| `ds_priority_queue.h` | `ds` | Binary min-heap |
+| `ds_hash_map.h` | `ds` | String-keyed chaining hash map with auto-resize |
+| `ds_graph.h` | `ds` | Adjacency-list graph |
 
 ### Two dynamic array styles
 
@@ -233,6 +303,8 @@ pass an expression with side effects.
 
 - `ds_arena_alloc(a, size, desc)` — **managed**. The collector may sweep it.
   Pass a descriptor if the object references other objects or owns raw buffers.
+  With no collector linked in, a managed block behaves like a raw one that
+  nothing ever frees; arena-only code should use `ds_arena_alloc_raw`.
 - `ds_arena_alloc_raw(a, size)` — **unmanaged**. Never swept, never traced. Use
   it for payload buffers owned by a managed object, and release them from that
   object's `finalize` callback.

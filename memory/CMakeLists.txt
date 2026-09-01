@@ -1,10 +1,20 @@
+# --------------------------------------------------------------------
+# Two libraries, one dependency edge
+# --------------------------------------------------------------------
+#
+#   ds_arena   the allocator on its own. Knows nothing about values,
+#              roots or collection. Link this alone and no collector
+#              code is compiled into the program.
+#   ds_gc      mark and sweep, built on ds_arena's block hooks.
+#
+# The edge only ever points this way. Adding an #include of gc.h to
+# ds_arena.c would create a cycle CMake cannot express, which is the
+# tripwire that keeps the split honest.
+
 add_library(ds_arena STATIC
     ds_arena.c
-    gc.c
     ds_platform.c
     include/ds_arena.h
-    include/common.h
-    include/gc.h
     include/ds_platform.h
 )
 
@@ -26,3 +36,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_libraries(ds_arena PUBLIC rt)
     endif()
 endif()
+
+add_library(ds_gc STATIC
+    gc.c
+    include/gc.h
+    include/ds_value.h
+    include/common.h
+)
+
+ds_set_target_flags(ds_gc)
+
+target_link_libraries(ds_gc PUBLIC ds_arena)

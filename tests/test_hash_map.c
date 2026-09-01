@@ -180,7 +180,7 @@ static void test_gc_interaction(void) {
 
   ds_gc_unregister_root(a, &root);
   ds_arena_run_gc(a);
-  CHECK(a->gc_live_allocations == 0, "an unrooted map is collected entirely");
+  CHECK(a->live_managed_allocations == 0, "an unrooted map is collected entirely");
 
   ds_arena_destroy(a);
 }

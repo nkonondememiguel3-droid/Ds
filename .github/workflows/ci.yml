@@ -84,8 +84,9 @@ jobs:
           body: |
             Compilation automatisée et optimisée multiplateforme.
 
-            * `include/` : Tous les fichiers d'en-tête du projet (`common.h`, `ds_arena.h`, `gc.h`, ainsi que toutes vos structures de données).
+            * `include/` : Tous les fichiers d'en-tête du projet (`ds_value.h`, `ds_arena.h`, `gc.h`, `common.h`, ainsi que toutes vos structures de données).
             * `libds.a` / `ds.lib` : Votre bibliothèque principale de structures de données.
-            * `libds_arena.a` / `ds_arena.lib` : Votre gestionnaire de mémoire (Arène + GC).
+            * `libds_gc.a` / `ds_gc.lib` : Le ramasse-miettes (mark & sweep), construit sur l'arène.
+            * `libds_arena.a` / `ds_arena.lib` : L'allocateur seul, utilisable sans le GC.
           draft: false
           prerelease: false

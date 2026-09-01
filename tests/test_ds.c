@@ -545,15 +545,15 @@ static void test_gc(void) {
 
   for (i = 0; i < 200; i++) ARENA_NEW(a, Cell, &cell_descriptor);
 
-  live_before = a->gc_live_allocations;
+  live_before = a->live_managed_allocations;
   CHECK(live_before == 202, "202 managed objects are live");
 
   ds_arena_run_gc(a);
-  CHECK(a->gc_live_allocations == 2, "the rooted cycle survives, the 200 orphans are swept");
+  CHECK(a->live_managed_allocations == 2, "the rooted cycle survives, the 200 orphans are swept");
 
   root = ds_make_nil();
   ds_arena_run_gc(a);
-  live_after = a->gc_live_allocations;
+  live_after = a->live_managed_allocations;
   CHECK(live_after == 0, "breaking the root collects the cycle itself");
 
   ds_gc_unregister_root(a, &root);
@@ -685,7 +685,7 @@ static void test_sweep_coalescing(void) {
   expected = 200 * (48 + ARENA_ALIGN);
 
   ds_arena_run_gc(a);
-  CHECK(a->gc_live_allocations == 0, "all 200 orphans are swept");
+  CHECK(a->live_managed_allocations == 0, "all 200 orphans are swept");
 
   /* The sweep walks each chunk in address order, so the 200 now-dead
    * blocks are neighbours in the walk and merge into one region. The old
@@ -718,7 +718,7 @@ static void test_mark_stack_bound(void) {
   CHECK(list->length == 20000, "the list survives the collection intact");
   /* Following `next` alone reaches every node on a circular chain; pushing
    * `prev` too grew this stack to 32768 entries for the same 20k nodes. */
-  CHECK(a->gc_mark_stack_cap <= 2048, "regression: the mark stack stays bounded when tracing a long list");
+  CHECK(ds_gc_state_of(a)->mark_stack_cap <= 2048, "regression: the mark stack stays bounded when tracing a long list");
 
   ds_gc_unregister_root(a, &root);
   ds_arena_destroy(a);
